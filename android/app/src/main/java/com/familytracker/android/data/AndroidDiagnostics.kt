@@ -3,6 +3,8 @@ package com.familytracker.android.data
 import android.Manifest
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.net.ConnectivityManager
@@ -29,6 +31,10 @@ object AndroidDiagnostics {
             network.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
         val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val ignoresBatteryOptimization = Build.VERSION.SDK_INT < 23 || power.isIgnoringBatteryOptimizations(context.packageName)
+        val batteryIntent: Intent? = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val batteryLevel = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val batteryScale = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val batteryPercent = if (batteryLevel >= 0 && batteryScale > 0) batteryLevel * 100 / batteryScale else null
 
         return JSONObject()
             .put("location_permission", fineLocation || coarseLocation)
@@ -37,6 +43,7 @@ object AndroidDiagnostics {
             .put("location_services", locationEnabled)
             .put("network_online", online)
             .put("battery_optimization_exempt", ignoresBatteryOptimization)
+            .put("battery_percent", batteryPercent ?: JSONObject.NULL)
             .put("queued_uploads", queued.coerceIn(0, 500))
     }
 }

@@ -146,7 +146,7 @@ function Dashboard() {
     }
     const { data, error } = await supabase
       .from("android_device_status")
-      .select("device_id,location_permission,background_permission,foreground_service,location_services,network_online,battery_optimization_exempt,queued_uploads,reported_at")
+      .select("device_id,location_permission,background_permission,foreground_service,location_services,network_online,battery_optimization_exempt,battery_percent,queued_uploads,reported_at")
       .eq("member_id", memberId)
       .order("reported_at", { ascending: false })
       .limit(1)
@@ -429,10 +429,11 @@ function Dashboard() {
                   <p className="muted">Laporan: {new Date(deviceDiagnostics.reported_at).toLocaleString("id-ID")}{Date.now() - new Date(deviceDiagnostics.reported_at).getTime() > offlineThresholdMs ? " · data mungkin sudah lama" : ""}</p>
                   <p><b>Izin lokasi:</b> {deviceDiagnostics.location_permission ? "Diizinkan" : "Belum diizinkan"}</p>
                   <p><b>Izin latar belakang:</b> {deviceDiagnostics.background_permission ? "Diizinkan" : "Belum diizinkan"}</p>
-                  <p><b>Foreground service:</b> {deviceDiagnostics.foreground_service ? "Aktif" : "Tidak aktif"}</p>
+                  <p><b>Foreground service:</b> {deviceDiagnostics.foreground_service ? "Aktif · layanan lokasi berjalan di latar dengan notifikasi persisten" : "Tidak aktif · lokasi latar tidak sedang dipantau"}</p>
                   <p><b>Location services:</b> {deviceDiagnostics.location_services ? "Aktif" : "Nonaktif"}</p>
                   <p><b>Network saat laporan:</b> {deviceDiagnostics.network_online ? "Online" : "Offline"}</p>
-                  <p><b>Battery optimization:</b> {deviceDiagnostics.battery_optimization_exempt ? "Dikecualikan" : "Aktif"}</p>
+                  <p><b>Baterai perangkat:</b> {deviceDiagnostics.battery_percent == null ? "Belum dilaporkan" : `${deviceDiagnostics.battery_percent}%`}</p>
+                  <p><b>Optimasi baterai:</b> {deviceDiagnostics.battery_optimization_exempt ? "Dikecualikan dari pembatasan" : "Pembatasan aktif · Android dapat membatasi aktivitas latar"}</p>
                   <p><b>Antrean upload lokal:</b> {deviceDiagnostics.queued_uploads} dari 500</p>
                 </>}
               </div>

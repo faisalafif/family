@@ -203,7 +203,8 @@ private fun FamilyTrackerApp() {
             DiagnosticLine("Foreground service", if (serviceRunning) "Aktif" else "Tidak aktif", serviceRunning)
             DiagnosticLine("Location services", if (isLocationEnabled(context)) "Aktif" else "Nonaktif", isLocationEnabled(context))
             DiagnosticLine("Network", if (isOnline(context)) "Online" else "Offline", isOnline(context))
-            DiagnosticLine("Battery optimization", if (ignoresBatteryOptimization(context)) "Dikecualikan" else "Aktif", ignoresBatteryOptimization(context))
+            DiagnosticLine("Battery optimization", if (ignoresBatteryOptimization(context)) "Pembatasan dikecualikan" else "Pembatasan aktif", ignoresBatteryOptimization(context))
+            DiagnosticLine("Baterai", batteryLevel(context)?.let { "$it%" } ?: "Tidak diketahui", true)
             Text("Antrean upload lokal: $queued dari 500", color = Ink)
             Text("Jika pembaruan berhenti pada Xiaomi/OPPO/Vivo/Realme, periksa izin autostart dan pembatasan baterai melalui pengaturan sistem. Aplikasi tidak mengubah pengaturan itu otomatis.", color = Color(0xFF68778C), style = MaterialTheme.typography.bodySmall)
         } }, confirmButton = { TextButton(onClick = { showDiagnostics = false }) { Text("Selesai") } }

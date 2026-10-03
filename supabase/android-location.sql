@@ -33,9 +33,16 @@ create table if not exists public.android_device_status (
   location_services boolean not null,
   network_online boolean not null,
   battery_optimization_exempt boolean not null,
+  battery_percent integer check (battery_percent between 0 and 100),
   queued_uploads integer not null default 0 check (queued_uploads between 0 and 500),
   reported_at timestamptz not null default now()
 );
+alter table public.android_device_status add column if not exists battery_percent integer;
+do $$ begin
+  alter table public.android_device_status add constraint android_device_status_battery_percent_check
+    check (battery_percent between 0 and 100);
+exception when duplicate_object then null;
+end $$;
 create index if not exists android_device_status_member_idx on public.android_device_status(member_id);
 alter table public.android_device_status enable row level security;
 drop policy if exists "mvp android device status read" on public.android_device_status;
