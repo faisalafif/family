@@ -18,7 +18,10 @@ class UploadLocationsWorker(context: Context, params: WorkerParameters) : Corout
         return try {
             for (record in dao.oldest()) {
                 if (record.memberId != memberId) throw IllegalStateException("Perangkat ditautkan ulang sebelum antrean lama terkirim.")
-                repository.upload(record, token, AndroidDiagnostics.snapshot(applicationContext, (dao.count() - 1).coerceAtLeast(0)))
+                val response = repository.upload(record, token, AndroidDiagnostics.snapshot(applicationContext, (dao.count() - 1).coerceAtLeast(0)))
+                preferences.adminMessage = response.optString("adminMessage", "")
+                preferences.adminMessageUpdatedAt = response.optString("adminMessageUpdatedAt").takeIf { it.isNotBlank() && it != "null" }
+                preferences.adminMessageSyncError = ""
                 dao.delete(record.id)
                 preferences.lastUpdate = record.timestamp
                 preferences.lastAccuracy = record.accuracy

@@ -49,8 +49,9 @@ class LocationForegroundService : Service() {
                         .fetchAdminMessage(token, memberId, preferences.deviceId)
                     preferences.adminMessage = response.optString("message", "")
                     preferences.adminMessageUpdatedAt = response.optString("updatedAt").takeIf { it.isNotBlank() && it != "null" }
-                } catch (_: Exception) {
-                    // Keep showing the last received message and retry on the next poll.
+                    preferences.adminMessageSyncError = ""
+                } catch (error: Exception) {
+                    preferences.adminMessageSyncError = error.message ?: "Gagal mengambil pesan dari admin."
                 } finally {
                     if (shouldPollMessages && preferences.protectionEnabled) messagePollHandler.postDelayed(poll, MESSAGE_POLL_INTERVAL_MS)
                 }
@@ -161,6 +162,6 @@ class LocationForegroundService : Service() {
         const val ACTION_STOP = "com.familytracker.android.STOP_LOCATION"
         private const val CHANNEL_ID = "location_protection"
         private const val NOTIFICATION_ID = 17
-        private const val MESSAGE_POLL_INTERVAL_MS = 60_000L
+        private const val MESSAGE_POLL_INTERVAL_MS = 15_000L
     }
 }

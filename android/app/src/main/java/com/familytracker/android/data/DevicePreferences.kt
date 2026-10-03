@@ -46,4 +46,7 @@ class DevicePreferences(context: Context) {
     var adminMessageUpdatedAt: String?
         get() = prefs.getString("admin_message_updated_at", null)
         set(value) { prefs.edit().putString("admin_message_updated_at", value).apply() }
+    var adminMessageSyncError: String
+        get() = prefs.getString("admin_message_sync_error", "").orEmpty()
+        set(value) { prefs.edit().putString("admin_message_sync_error", value).apply() }
 }

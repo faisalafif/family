@@ -148,7 +148,7 @@ private fun FamilyTrackerApp() {
     DisposableEffect(prefs) {
         val mainHandler = Handler(Looper.getMainLooper())
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key in setOf("protection_enabled", "last_update", "last_accuracy", "last_status", "admin_message")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context) }
+            if (key in setOf("protection_enabled", "last_update", "last_accuracy", "last_status", "admin_message", "admin_message_sync_error")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context) }
         }
         prefs.addListener(listener)
         onDispose { prefs.removeListener(listener) }
@@ -217,6 +217,9 @@ private fun FamilyTrackerApp() {
             if (prefs.adminMessage.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Text(prefs.adminMessage, style = MaterialTheme.typography.bodyLarge, color = Ink)
+            } else if (prefs.adminMessageSyncError.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text("Pesan admin belum bisa dimuat: ${prefs.adminMessageSyncError}", style = MaterialTheme.typography.bodySmall, color = Color(0xFFB42318))
             }
             Spacer(Modifier.height(16.dp))
             MovingPinIllustration()

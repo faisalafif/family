@@ -365,7 +365,7 @@ function Dashboard() {
     if (error) setAdminMessageNotice(`Gagal mengirim pesan: ${error.message}`);
     else {
       setAdminMessageDraft("");
-      setAdminMessageNotice("Pesan terkirim. Android akan menampilkannya saat pengecekan berikutnya.");
+      setAdminMessageNotice("Pesan tersimpan. Android menerimanya saat online dan perlindungan aktif, biasanya dalam beberapa detik.");
     }
     setSendingAdminMessage(false);
   }

@@ -42,7 +42,7 @@ class FunctionsRepository {
             .put("trackingToken", token).put("memberId", memberId).put("deviceId", deviceId))
     }
 
-    suspend fun upload(location: PendingLocation, trackingToken: String, diagnostics: JSONObject) = withContext(Dispatchers.IO) {
+    suspend fun upload(location: PendingLocation, trackingToken: String, diagnostics: JSONObject): JSONObject = withContext(Dispatchers.IO) {
         call("android-location-ingest", JSONObject()
             .put("trackingToken", trackingToken).put("memberId", location.memberId).put("deviceId", location.deviceId).put("eventId", location.eventId)
             .put("latitude", location.latitude).put("longitude", location.longitude).put("accuracy", location.accuracy.toDouble())

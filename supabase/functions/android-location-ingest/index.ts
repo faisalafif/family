@@ -27,7 +27,9 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
       (body?.bearing != null && (Number(body.bearing) < 0 || Number(body.bearing) > 360))) {
     return json({ message: "Nilai sensor berada di luar rentang yang diizinkan." }, 400);
   }
-  const { data: member } = await admin.from("family_members").select("id").eq("id", memberId).eq("tracking_token", trackingToken).maybeSingle();
+  const { data: member } = await admin.from("family_members")
+    .select("id,admin_message,admin_message_updated_at")
+    .eq("id", memberId).eq("tracking_token", trackingToken).maybeSingle();
   if (!member) return json({ message: "Perangkat tidak terautentikasi untuk anggota ini." }, 403);
   const { data: device } = await admin.from("android_devices").select("device_id").eq("device_id", deviceId).eq("member_id", memberId).maybeSingle();
   if (!device) return json({ message: "Perangkat belum terdaftar untuk anggota ini." }, 403);
@@ -63,5 +65,5 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
     }, { onConflict: "device_id" });
     if (diagnosticsError) return json({ message: "Lokasi tersimpan tetapi diagnostik perangkat gagal diperbarui." }, 500);
   }
-  return json({ ok: true });
+  return json({ ok: true, adminMessage: member.admin_message ?? "", adminMessageUpdatedAt: member.admin_message_updated_at });
 }));
