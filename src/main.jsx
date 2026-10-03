@@ -71,6 +71,7 @@ function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [locationHistory, setLocationHistory] = useState([]);
   const [deviceDiagnostics, setDeviceDiagnostics] = useState(null);
+  const [deviceDiagnosticsError, setDeviceDiagnosticsError] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [requestingLocation, setRequestingLocation] = useState(false);
   const [providerMessage, setProviderMessage] = useState("");
@@ -150,9 +151,13 @@ function Dashboard() {
       .order("reported_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (!error) setDeviceDiagnostics(data || null);
+    if (!error) {
+      setDeviceDiagnostics(data || null);
+      setDeviceDiagnosticsError("");
+    }
     else {
       setDeviceDiagnostics(null);
+      setDeviceDiagnosticsError(error.message || "Gagal membaca laporan diagnostik.");
       console.warn("Diagnostik Android belum tersedia; jalankan supabase/android-location.sql", error);
     }
   }
@@ -420,7 +425,7 @@ function Dashboard() {
 
               <div className="device-diagnostics">
                 <h3>Diagnostik Android</h3>
-                {!deviceDiagnostics ? <p className="muted">Belum ada laporan diagnostik dari aplikasi Android.</p> : <>
+                {deviceDiagnosticsError ? <p className="muted">Gagal memuat diagnostik: {deviceDiagnosticsError}. Jalankan ulang supabase/android-location.sql di Supabase SQL Editor.</p> : !deviceDiagnostics ? <p className="muted">Belum ada laporan diagnostik. Pasang APK Android terbaru, deploy ulang android-location-ingest, lalu tunggu Android mengirim lokasi berikutnya.</p> : <>
                   <p className="muted">Laporan: {new Date(deviceDiagnostics.reported_at).toLocaleString("id-ID")}{Date.now() - new Date(deviceDiagnostics.reported_at).getTime() > offlineThresholdMs ? " · data mungkin sudah lama" : ""}</p>
                   <p><b>Izin lokasi:</b> {deviceDiagnostics.location_permission ? "Diizinkan" : "Belum diizinkan"}</p>
                   <p><b>Izin latar belakang:</b> {deviceDiagnostics.background_permission ? "Diizinkan" : "Belum diizinkan"}</p>

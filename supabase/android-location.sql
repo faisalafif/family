@@ -41,6 +41,8 @@ alter table public.android_device_status enable row level security;
 drop policy if exists "mvp android device status read" on public.android_device_status;
 create policy "mvp android device status read"
   on public.android_device_status for select using (true);
+grant select on public.android_device_status to anon, authenticated;
+grant all on public.android_device_status to service_role;
 
 do $$ begin
   alter publication supabase_realtime add table public.android_device_status;
