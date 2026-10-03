@@ -1,6 +1,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f7fb; color: #18202a; }
 button, input { font: inherit; }
+textarea { width: 100%; padding: 11px 12px; border: 1px solid #d0d5dd; border-radius: 9px; outline: none; resize: vertical; font: inherit; }
+textarea:focus { border-color: #667085; }
 button { cursor: pointer; border: 0; }
 .app header { padding: 20px 28px; background: white; border-bottom: 1px solid #e5e7eb; }
 h1, h2, p { margin-top: 0; }
@@ -70,6 +72,9 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .device-diagnostics h3 { margin: 0 0 8px; font-size: 14px; }
 .device-diagnostics p { margin: 6px 0; font-size: 13px; }
 .device-diagnostics .muted { font-size: 11px; }
+.admin-message-compose { margin: 14px 0; padding: 12px; border-radius: 10px; background: #f8fafc; }
+.admin-message-compose h3 { margin: 0 0 8px; font-size: 14px; }
+.admin-message-compose .secondary { margin-top: 8px; }
 .icon-button:disabled { opacity: .65; cursor: wait; }
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; height: auto; }

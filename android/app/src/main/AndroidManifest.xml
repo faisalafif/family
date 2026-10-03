@@ -24,9 +24,11 @@
         <service
             android:name=".service.LocationForegroundService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="location" />
         <receiver android:name=".service.BootReceiver" android:enabled="true" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
         </receiver>
+        <receiver android:name=".service.LocationRestartReceiver" android:enabled="true" android:exported="false" />
     </application>
 </manifest>

@@ -148,7 +148,7 @@ private fun FamilyTrackerApp() {
     DisposableEffect(prefs) {
         val mainHandler = Handler(Looper.getMainLooper())
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key in setOf("protection_enabled", "last_update", "last_accuracy", "last_status")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context) }
+            if (key in setOf("protection_enabled", "last_update", "last_accuracy", "last_status", "admin_message")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context) }
         }
         prefs.addListener(listener)
         onDispose { prefs.removeListener(listener) }
@@ -214,6 +214,10 @@ private fun FamilyTrackerApp() {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(24.dp))
             Text("note", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = Ink)
+            if (prefs.adminMessage.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(prefs.adminMessage, style = MaterialTheme.typography.bodyLarge, color = Ink)
+            }
             Spacer(Modifier.height(16.dp))
             MovingPinIllustration()
 

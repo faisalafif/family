@@ -6,6 +6,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.os.Build.VERSION
+import android.os.Build.VERSION_CODES
+import android.os.Handler
+import android.os.Looper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager as SystemLocationManager
@@ -31,6 +35,28 @@ class LocationForegroundService : Service() {
     private lateinit var locationManager: LocationManager
     private lateinit var callback: LocationCallback
     private lateinit var preferences: DevicePreferences
+    private val messagePollHandler = Handler(Looper.getMainLooper())
+    private var shouldPollMessages = false
+    private val messagePoll = object : Runnable {
+        override fun run() {
+            if (!shouldPollMessages || !::preferences.isInitialized || !preferences.protectionEnabled) return
+            val token = preferences.trackingToken ?: return
+            val memberId = preferences.memberId ?: return
+            val poll = this
+            scope.launch {
+                try {
+                    val response = com.familytracker.android.data.FunctionsRepository()
+                        .fetchAdminMessage(token, memberId, preferences.deviceId)
+                    preferences.adminMessage = response.optString("message", "")
+                    preferences.adminMessageUpdatedAt = response.optString("updatedAt").takeIf { it.isNotBlank() && it != "null" }
+                } catch (_: Exception) {
+                    // Keep showing the last received message and retry on the next poll.
+                } finally {
+                    if (shouldPollMessages && preferences.protectionEnabled) messagePollHandler.postDelayed(poll, MESSAGE_POLL_INTERVAL_MS)
+                }
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -52,6 +78,8 @@ class LocationForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             preferences.protectionEnabled = false
+            shouldPollMessages = false
+            messagePollHandler.removeCallbacks(messagePoll)
             locationManager.stop(callback)
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -73,6 +101,9 @@ class LocationForegroundService : Service() {
         preferences.protectionEnabled = true
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification("Perlindungan lokasi aktif"),
             if (Build.VERSION.SDK_INT >= 29) android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION else 0)
+        shouldPollMessages = true
+        messagePollHandler.removeCallbacks(messagePoll)
+        messagePollHandler.post(messagePoll)
         try {
             locationManager.start(callback)
             preferences.lastStatus = "Menunggu pembaruan lokasi…"
@@ -109,9 +140,18 @@ class LocationForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        shouldPollMessages = false
+        messagePollHandler.removeCallbacks(messagePoll)
         if (::locationManager.isInitialized && ::callback.isInitialized) locationManager.stop(callback)
         scope.cancel()
         super.onDestroy()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        if (VERSION.SDK_INT < VERSION_CODES.O && preferences.protectionEnabled && preferences.memberId != null) {
+            LocationRestartReceiver.schedule(this)
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -121,5 +161,6 @@ class LocationForegroundService : Service() {
         const val ACTION_STOP = "com.familytracker.android.STOP_LOCATION"
         private const val CHANNEL_ID = "location_protection"
         private const val NOTIFICATION_ID = 17
+        private const val MESSAGE_POLL_INTERVAL_MS = 60_000L
     }
 }

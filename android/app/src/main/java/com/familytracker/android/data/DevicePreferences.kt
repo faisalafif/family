@@ -40,4 +40,10 @@ class DevicePreferences(context: Context) {
     var lastStatus: String
         get() = prefs.getString("last_status", "Menunggu lokasi pertama") ?: "Menunggu lokasi pertama"
         set(value) { prefs.edit().putString("last_status", value).apply() }
+    var adminMessage: String
+        get() = prefs.getString("admin_message", "").orEmpty()
+        set(value) { prefs.edit().putString("admin_message", value).apply() }
+    var adminMessageUpdatedAt: String?
+        get() = prefs.getString("admin_message_updated_at", null)
+        set(value) { prefs.edit().putString("admin_message_updated_at", value).apply() }
 }

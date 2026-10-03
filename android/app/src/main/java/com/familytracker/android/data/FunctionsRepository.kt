@@ -37,6 +37,11 @@ class FunctionsRepository {
         result.getString("memberId") to result.getString("name")
     }
 
+    suspend fun fetchAdminMessage(token: String, memberId: String, deviceId: String): JSONObject = withContext(Dispatchers.IO) {
+        call("android-message-fetch", JSONObject()
+            .put("trackingToken", token).put("memberId", memberId).put("deviceId", deviceId))
+    }
+
     suspend fun upload(location: PendingLocation, trackingToken: String, diagnostics: JSONObject) = withContext(Dispatchers.IO) {
         call("android-location-ingest", JSONObject()
             .put("trackingToken", trackingToken).put("memberId", location.memberId).put("deviceId", location.deviceId).put("eventId", location.eventId)

@@ -72,6 +72,9 @@ function Dashboard() {
   const [locationHistory, setLocationHistory] = useState([]);
   const [deviceDiagnostics, setDeviceDiagnostics] = useState(null);
   const [deviceDiagnosticsError, setDeviceDiagnosticsError] = useState("");
+  const [adminMessageDraft, setAdminMessageDraft] = useState("");
+  const [sendingAdminMessage, setSendingAdminMessage] = useState(false);
+  const [adminMessageNotice, setAdminMessageNotice] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
   const [requestingLocation, setRequestingLocation] = useState(false);
   const [providerMessage, setProviderMessage] = useState("");
@@ -350,6 +353,23 @@ function Dashboard() {
     loadMembers();
   }
 
+  async function sendAdminMessage() {
+    const message = adminMessageDraft.trim();
+    if (!supabase || !selected || !message || sendingAdminMessage) return;
+    setSendingAdminMessage(true);
+    setAdminMessageNotice("");
+    const { error } = await supabase.from("family_members").update({
+      admin_message: message,
+      admin_message_updated_at: new Date().toISOString()
+    }).eq("id", selected.id);
+    if (error) setAdminMessageNotice(`Gagal mengirim pesan: ${error.message}`);
+    else {
+      setAdminMessageDraft("");
+      setAdminMessageNotice("Pesan terkirim. Android akan menampilkannya saat pengecekan berikutnya.");
+    }
+    setSendingAdminMessage(false);
+  }
+
   const trackingUrl = selected
     ? `${window.location.origin}/track/${selected.tracking_token}`
     : "";
@@ -422,6 +442,22 @@ function Dashboard() {
                 return <p><b>Device status:</b> {ageMs >= offlineThresholdMs ? "Last known location · " : ""}{status} · {Math.floor(ageMs / 60_000)} min ago</p>;
               })()}
               <p><b>Source:</b> {locationSourceLabel(selected)}</p>
+
+              <div className="admin-message-compose">
+                <h3>Kirim teks ke Android</h3>
+                <textarea
+                  value={adminMessageDraft}
+                  onChange={event => setAdminMessageDraft(event.target.value)}
+                  placeholder="Tulis pesan, emoji juga bisa 🙂"
+                  maxLength={500}
+                  rows={3}
+                  aria-label="Pesan untuk perangkat Android"
+                />
+                <button type="button" className="secondary" onClick={sendAdminMessage} disabled={!adminMessageDraft.trim() || sendingAdminMessage}>
+                  {sendingAdminMessage ? "Mengirim..." : "Kirim teks"}
+                </button>
+                {adminMessageNotice && <p className="muted" role="status">{adminMessageNotice}</p>}
+              </div>
 
               <div className="device-diagnostics">
                 <h3>Diagnostik Android</h3>

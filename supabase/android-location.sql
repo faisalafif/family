@@ -9,6 +9,8 @@ alter table public.locations add column if not exists bearing double precision;
 alter table public.family_members add column if not exists last_source text;
 alter table public.family_members add column if not exists last_provider text;
 alter table public.family_members add column if not exists device_seen_at timestamptz;
+alter table public.family_members add column if not exists admin_message text;
+alter table public.family_members add column if not exists admin_message_updated_at timestamptz;
 
 create unique index if not exists locations_event_id_idx on public.locations(event_id);
 create index if not exists locations_device_recorded_idx on public.locations(device_id, recorded_at desc) where device_id is not null;

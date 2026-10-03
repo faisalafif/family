@@ -12,6 +12,7 @@ class LocationManager(context: Context) {
         .build()
 
     fun start(callback: LocationCallback) {
+        client.removeLocationUpdates(callback)
         client.requestLocationUpdates(request, callback, Looper.getMainLooper())
     }
 
