@@ -11,10 +11,16 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
   const timestamp = String(body?.timestamp ?? "");
   const epoch = Date.parse(timestamp);
   const optionalNumbers = [body?.altitude, body?.speed, body?.bearing].filter((value) => value != null).map(Number);
+  const diagnostics = body?.diagnostics;
   if (![trackingToken, deviceId, memberId, eventId].every(isUuid) || !Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180 || !Number.isFinite(accuracy) || accuracy <= 0 || accuracy > 100_000 || !Number.isFinite(epoch) || epoch > Date.now() + 300_000) {
     return json({ message: "Data lokasi tidak valid." }, 400);
   }
   if (optionalNumbers.some((number) => !Number.isFinite(number))) return json({ message: "Data sensor lokasi tidak valid." }, 400);
+  if (diagnostics != null && (!diagnostics || typeof diagnostics !== "object" ||
+      !["location_permission", "background_permission", "foreground_service", "location_services", "network_online", "battery_optimization_exempt"].every((key) => typeof diagnostics[key] === "boolean") ||
+      !Number.isInteger(Number(diagnostics.queued_uploads)) || Number(diagnostics.queued_uploads) < 0 || Number(diagnostics.queued_uploads) > 500)) {
+    return json({ message: "Data diagnostik perangkat tidak valid." }, 400);
+  }
   if ((body?.altitude != null && (Number(body.altitude) < -1000 || Number(body.altitude) > 100000)) ||
       (body?.speed != null && (Number(body.speed) < 0 || Number(body.speed) > 200)) ||
       (body?.bearing != null && (Number(body.bearing) < 0 || Number(body.bearing) > 360))) {
@@ -41,5 +47,19 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
   if (memberError) return json({ message: "Lokasi tersimpan tetapi posisi terakhir gagal diperbarui." }, 500);
   const { error: deviceError } = await admin.from("android_devices").update({ last_seen: new Date().toISOString() }).eq("device_id", deviceId);
   if (deviceError) return json({ message: "Lokasi tersimpan tetapi status perangkat gagal diperbarui." }, 500);
+  if (diagnostics) {
+    const { error: diagnosticsError } = await admin.from("android_device_status").upsert({
+      device_id: deviceId, member_id: memberId,
+      location_permission: diagnostics.location_permission,
+      background_permission: diagnostics.background_permission,
+      foreground_service: diagnostics.foreground_service,
+      location_services: diagnostics.location_services,
+      network_online: diagnostics.network_online,
+      battery_optimization_exempt: diagnostics.battery_optimization_exempt,
+      queued_uploads: Number(diagnostics.queued_uploads),
+      reported_at: new Date().toISOString(),
+    }, { onConflict: "device_id" });
+    if (diagnosticsError) return json({ message: "Lokasi tersimpan tetapi diagnostik perangkat gagal diperbarui." }, 500);
+  }
   return json({ ok: true });
 }));

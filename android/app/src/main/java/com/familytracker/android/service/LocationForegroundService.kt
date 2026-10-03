@@ -96,7 +96,7 @@ class LocationForegroundService : Service() {
         val pause = PendingIntent.getService(this, 1, Intent(this, LocationForegroundService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setContentTitle("Family Tracker")
+            .setContentTitle("note")
             .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)

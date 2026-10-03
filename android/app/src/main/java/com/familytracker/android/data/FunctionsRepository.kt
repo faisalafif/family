@@ -32,16 +32,17 @@ class FunctionsRepository {
         }
     }
 
-    suspend fun register(name: String, phone: String, token: String, deviceId: String): String = withContext(Dispatchers.IO) {
-        call("device-register", JSONObject().put("name", name).put("phone", phone).put("trackingToken", token).put("deviceId", deviceId))
-            .getString("memberId")
+    suspend fun register(token: String, deviceId: String): Pair<String, String> = withContext(Dispatchers.IO) {
+        val result = call("device-register", JSONObject().put("trackingToken", token).put("deviceId", deviceId))
+        result.getString("memberId") to result.getString("name")
     }
 
-    suspend fun upload(location: PendingLocation, trackingToken: String) = withContext(Dispatchers.IO) {
+    suspend fun upload(location: PendingLocation, trackingToken: String, diagnostics: JSONObject) = withContext(Dispatchers.IO) {
         call("android-location-ingest", JSONObject()
             .put("trackingToken", trackingToken).put("memberId", location.memberId).put("deviceId", location.deviceId).put("eventId", location.eventId)
             .put("latitude", location.latitude).put("longitude", location.longitude).put("accuracy", location.accuracy.toDouble())
             .put("altitude", location.altitude ?: JSONObject.NULL).put("speed", location.speed?.toDouble() ?: JSONObject.NULL)
-            .put("bearing", location.bearing?.toDouble() ?: JSONObject.NULL).put("timestamp", location.timestamp))
+            .put("bearing", location.bearing?.toDouble() ?: JSONObject.NULL).put("timestamp", location.timestamp)
+            .put("diagnostics", diagnostics))
     }
 }

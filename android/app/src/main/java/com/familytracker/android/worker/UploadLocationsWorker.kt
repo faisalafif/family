@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.familytracker.android.data.DevicePreferences
+import com.familytracker.android.data.AndroidDiagnostics
 import com.familytracker.android.data.FunctionsRepository
 import com.familytracker.android.data.LocalDatabase
 
@@ -17,7 +18,7 @@ class UploadLocationsWorker(context: Context, params: WorkerParameters) : Corout
         return try {
             for (record in dao.oldest()) {
                 if (record.memberId != memberId) throw IllegalStateException("Perangkat ditautkan ulang sebelum antrean lama terkirim.")
-                repository.upload(record, token)
+                repository.upload(record, token, AndroidDiagnostics.snapshot(applicationContext, (dao.count() - 1).coerceAtLeast(0)))
                 dao.delete(record.id)
                 preferences.lastUpdate = record.timestamp
                 preferences.lastAccuracy = record.accuracy

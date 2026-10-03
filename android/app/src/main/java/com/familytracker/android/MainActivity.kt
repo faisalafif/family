@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,7 +45,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -84,12 +82,13 @@ private fun FamilyTrackerApp() {
     var screenRefresh by remember { mutableIntStateOf(0) }
     var showDiagnostics by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf(prefs.name.orEmpty()) }
-    var phone by remember { mutableStateOf(prefs.phone.orEmpty()) }
     var tokenInput by remember { mutableStateOf(prefs.trackingToken.orEmpty()) }
     var busy by remember { mutableStateOf(false) }
+    var autoStartAfterLink by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var hasFine by remember { mutableStateOf(hasLocationPermission(context)) }
     var hasBackground by remember { mutableStateOf(hasBackgroundPermission(context)) }
+    var locationEnabled by remember { mutableStateOf(isLocationEnabled(context)) }
     var hasNotification by remember { mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) }
     var queued by remember { mutableIntStateOf(0) }
     var serviceRunning by remember { mutableStateOf(isLocationServiceRunning(context)) }
@@ -97,6 +96,7 @@ private fun FamilyTrackerApp() {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) {
             hasFine = hasLocationPermission(context); hasBackground = hasBackgroundPermission(context)
+            locationEnabled = isLocationEnabled(context)
             hasNotification = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             serviceRunning = isLocationServiceRunning(context)
             screenRefresh++
@@ -109,13 +109,24 @@ private fun FamilyTrackerApp() {
 
     val foregroundPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         hasFine = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        if (!hasFine) message = "Izin lokasi ditolak. Izinkan lokasi agar perangkat ini bisa membagikan lokasinya."
+        if (!hasFine) {
+            message = "Izin lokasi ditolak. Izinkan lokasi agar perangkat ini bisa membagikan lokasinya."
+            autoStartAfterLink = false
+        }
         screenRefresh++
     }
-    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasNotification = it }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        hasNotification = it
+        if (!it) {
+            message = "Izin notifikasi diperlukan agar status layanan lokasi terlihat."
+            autoStartAfterLink = false
+        }
+        screenRefresh++
+    }
 
     val requestForegroundPermission: () -> Unit = {
         if (prefs.locationPermissionAsked) {
+            autoStartAfterLink = false
             message = "Izin lokasi sebelumnya ditolak. Ubah izin aplikasi secara manual di Pengaturan Android."
             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
         } else {
@@ -125,7 +136,8 @@ private fun FamilyTrackerApp() {
     }
     val requestNotificationPermission: () -> Unit = {
         if (prefs.notificationPermissionAsked) {
-            message = "Aktifkan notifikasi Family Tracker di Pengaturan Android agar status layanan tetap terlihat."
+            autoStartAfterLink = false
+            message = "Aktifkan notifikasi note di Pengaturan Android agar status layanan tetap terlihat."
             context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
         } else {
             prefs.notificationPermissionAsked = true
@@ -144,16 +156,16 @@ private fun FamilyTrackerApp() {
 
     val registerAndContinue: () -> Unit = {
         val token = parseTrackingToken(tokenInput)
-        if (name.isBlank() || !validIndonesianPhone(phone)) message = "Isi nama dan nomor Indonesia yang valid terlebih dahulu."
-        else if (token == null) message = "Tempel token dari tracking link anggota yang sudah dibuat di dashboard."
+        if (token == null) message = "Tempel tracking link anggota yang sudah dibuat di dashboard."
         else {
             busy = true; message = "Menghubungkan perangkat ke anggota keluarga…"
             scope.launch {
-                runCatching { FunctionsRepository().register(name.trim(), normalizePhone(phone), token, prefs.deviceId) }
-                    .onSuccess { memberId ->
-                        prefs.name = name.trim(); prefs.phone = normalizePhone(phone); prefs.trackingToken = token; prefs.memberId = memberId
-                        message = "Perangkat berhasil ditautkan. Berikutnya izinkan lokasi dan aktifkan perlindungan."
-                        if (!hasFine) requestForegroundPermission()
+                runCatching { FunctionsRepository().register(token, prefs.deviceId) }
+                    .onSuccess { registration ->
+                        name = registration.second
+                        prefs.name = registration.second; prefs.phone = null; prefs.trackingToken = token; prefs.memberId = registration.first
+                        message = "Perangkat berhasil ditautkan. Izinkan akses yang diminta; perlindungan akan aktif otomatis."
+                        autoStartAfterLink = true
                     }
                     .onFailure { message = it.message ?: "Pendaftaran perangkat gagal." }
                 busy = false; screenRefresh++
@@ -163,16 +175,22 @@ private fun FamilyTrackerApp() {
 
     val startProtection: () -> Unit = {
         if (prefs.memberId == null) message = "Tautkan perangkat ke anggota keluarga lebih dulu."
-        else if (!hasFine) requestForegroundPermission()
-        else if (!hasBackground && Build.VERSION.SDK_INT >= 29) message = "Untuk berbagi lokasi berkelanjutan, izinkan akses lokasi 'Sepanjang waktu' melalui tombol izin latar belakang."
-        else if (!isLocationEnabled(context)) message = "Aktifkan Location / Lokasi di pengaturan Android."
-        else if (Build.VERSION.SDK_INT >= 33 && !hasNotification) {
-            requestNotificationPermission()
-            message = "Izinkan notifikasi agar status foreground service lokasi selalu terlihat."
-        }
-        else {
-            ContextCompat.startForegroundService(context, Intent(context, LocationForegroundService::class.java).setAction(LocationForegroundService.ACTION_START))
-            prefs.protectionEnabled = true; prefs.lastStatus = "Mengaktifkan perlindungan lokasi…"; screenRefresh++
+        else autoStartAfterLink = true
+    }
+
+    LaunchedEffect(autoStartAfterLink, hasFine, hasBackground, hasNotification, locationEnabled, prefs.memberId) {
+        if (autoStartAfterLink && prefs.memberId != null) {
+            when {
+                !hasFine -> requestForegroundPermission()
+                Build.VERSION.SDK_INT >= 29 && !hasBackground -> message = "Pilih 'Izinkan sepanjang waktu' di izin lokasi. Setelah kembali ke note, perlindungan akan aktif otomatis."
+                !locationEnabled -> message = "Aktifkan Location / Lokasi di pengaturan Android. Setelah kembali ke note, perlindungan akan aktif otomatis."
+                Build.VERSION.SDK_INT >= 33 && !hasNotification -> requestNotificationPermission()
+                else -> {
+                    autoStartAfterLink = false
+                    ContextCompat.startForegroundService(context, Intent(context, LocationForegroundService::class.java).setAction(LocationForegroundService.ACTION_START))
+                    prefs.protectionEnabled = true; prefs.lastStatus = "Mengaktifkan perlindungan lokasi…"; screenRefresh++
+                }
+            }
         }
     }
 
@@ -194,20 +212,17 @@ private fun FamilyTrackerApp() {
     Surface(Modifier.fillMaxSize(), color = Soft) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(24.dp))
-            Text("Family Tracker", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = Ink)
-            Text("Berbagi lokasi dengan keluarga", color = Color(0xFF68778C))
+            Text("note", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = Ink)
             Spacer(Modifier.height(16.dp))
             MovingPinIllustration()
 
             if (prefs.memberId == null) {
                 Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(22.dp)) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Siapkan perangkat ini", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink)
-                        Text("Buat anggota keluarga dulu di dashboard, lalu tempel token tracking link miliknya untuk menautkan perangkat ini.", color = Color(0xFF68778C))
-                        OutlinedTextField(name, { name = it }, label = { Text("Nama") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(phone, { phone = it }, label = { Text("Nomor telepon") }, placeholder = { Text("+62812xxxxxxxx") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), singleLine = true, modifier = Modifier.fillMaxWidth())
+                        Text("Hubungkan perangkat", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink)
+                        Text("Tempel tracking link anggota yang sudah dibuat di dashboard. Anggota akan dikenali otomatis. Link ini bersifat rahasia; bagikan hanya kepada pemilik perangkat.", color = Color(0xFF68778C))
                         OutlinedTextField(tokenInput, { tokenInput = it }, label = { Text("Tracking link / token dari dashboard") }, minLines = 2, modifier = Modifier.fillMaxWidth())
-                        Button(onClick = registerAndContinue, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Menghubungkan…" else "Lanjutkan") }
+                        Button(onClick = registerAndContinue, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Menghubungkan…" else "Tautkan perangkat") }
                     }
                 }
             } else {
@@ -243,20 +258,12 @@ private fun FamilyTrackerApp() {
                             OutlinedButton(onClick = requestNotificationPermission, modifier = Modifier.fillMaxWidth()) { Text("Izinkan notifikasi layanan") }
                         }
                         TextButton(onClick = { showDiagnostics = true }) { Text("Diagnostik perangkat") }
-                        TextButton(onClick = {
-                            if (queued > 0) message = "Masih ada $queued lokasi yang belum tersinkron. Sambungkan internet sampai antrean kosong sebelum mengganti anggota."
-                            else {
-                                if (serviceRunning) context.startService(Intent(context, LocationForegroundService::class.java).setAction(LocationForegroundService.ACTION_STOP))
-                                name = ""; phone = ""; tokenInput = ""; prefs.memberId = null; prefs.name = null; prefs.phone = null; prefs.trackingToken = null; screenRefresh++
-                            }
-                        }) { Text("Ganti anggota tertaut") }
                     }
                 }
             }
 
             if (message.isNotBlank()) Text(message, color = if (message.contains("gagal", true) || message.contains("ditolak", true)) Color(0xFFB42318) else Color(0xFF475467), modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
             Spacer(Modifier.height(8.dp))
-            Text("Lokasi hanya dibagikan saat perlindungan aktif. Notifikasi persisten Android akan selalu terlihat.", color = Color(0xFF68778C), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -300,7 +307,11 @@ private fun hasLocationPermission(context: Context) = ContextCompat.checkSelfPer
 private fun isLocationServiceRunning(context: Context): Boolean = (context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
     .getRunningServices(Int.MAX_VALUE).any { it.service.className == "com.familytracker.android.service.LocationForegroundService" }
 private fun hasBackgroundPermission(context: Context) = Build.VERSION.SDK_INT < 29 || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
-private fun isLocationEnabled(context: Context) = (context.getSystemService(Context.LOCATION_SERVICE) as LocationManager).isLocationEnabled
+private fun isLocationEnabled(context: Context): Boolean {
+    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    return if (Build.VERSION.SDK_INT >= 28) locationManager.isLocationEnabled
+    else locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) || locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+}
 private fun isOnline(context: Context): Boolean {
     val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     val network = manager.activeNetwork ?: return false
@@ -313,10 +324,5 @@ private fun batteryLevel(context: Context): Int? {
     return if (level >= 0 && scale > 0) level * 100 / scale else null
 }
 private fun ignoresBatteryOptimization(context: Context) = (context.getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(context.packageName)
-private fun validIndonesianPhone(value: String) = Regex("^(?:\\+?62|0)8[0-9]{8,11}$").matches(value.replace(Regex("[\\s().-]"), ""))
-private fun normalizePhone(value: String): String {
-    val digits = value.replace(Regex("[\\s().-]"), "")
-    return when { digits.startsWith("+62") -> digits; digits.startsWith("62") -> "+$digits"; digits.startsWith("0") -> "+62${digits.drop(1)}"; else -> digits }
-}
 private fun parseTrackingToken(value: String): String? = Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").find(value)?.value
 private fun formatTime(value: String): String = runCatching { Instant.parse(value).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm:ss")) }.getOrDefault(value)

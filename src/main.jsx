@@ -70,6 +70,7 @@ function Dashboard() {
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
   const [locationHistory, setLocationHistory] = useState([]);
+  const [deviceDiagnostics, setDeviceDiagnostics] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [requestingLocation, setRequestingLocation] = useState(false);
   const [providerMessage, setProviderMessage] = useState("");
@@ -137,10 +138,30 @@ function Dashboard() {
     }
   }
 
+  async function loadDeviceDiagnostics(memberId) {
+    if (!supabase || !memberId) {
+      setDeviceDiagnostics(null);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("android_device_status")
+      .select("device_id,location_permission,background_permission,foreground_service,location_services,network_online,battery_optimization_exempt,queued_uploads,reported_at")
+      .eq("member_id", memberId)
+      .order("reported_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!error) setDeviceDiagnostics(data || null);
+    else {
+      setDeviceDiagnostics(null);
+      console.warn("Diagnostik Android belum tersedia; jalankan supabase/android-location.sql", error);
+    }
+  }
+
   async function handleRefresh() {
     await loadMembers();
     if (selected?.id) {
       await loadLocationHistory(selected.id);
+      await loadDeviceDiagnostics(selected.id);
     }
   }
 
@@ -193,9 +214,21 @@ function Dashboard() {
           if (selected?.id) loadLocationHistory(selected.id);
         }
       )
+      .on("postgres_changes",
+        { event: "*", schema: "public", table: "android_device_status" },
+        () => { if (selected?.id) loadDeviceDiagnostics(selected.id); }
+      )
       .subscribe();
 
     return () => supabase.removeChannel(channel);
+  }, [selected?.id]);
+
+  useEffect(() => {
+    if (!selected?.id) {
+      setDeviceDiagnostics(null);
+      return;
+    }
+    loadDeviceDiagnostics(selected.id);
   }, [selected?.id]);
 
   useEffect(() => {
@@ -384,6 +417,20 @@ function Dashboard() {
                 return <p><b>Device status:</b> {ageMs >= offlineThresholdMs ? "Last known location · " : ""}{status} · {Math.floor(ageMs / 60_000)} min ago</p>;
               })()}
               <p><b>Source:</b> {locationSourceLabel(selected)}</p>
+
+              <div className="device-diagnostics">
+                <h3>Diagnostik Android</h3>
+                {!deviceDiagnostics ? <p className="muted">Belum ada laporan diagnostik dari aplikasi Android.</p> : <>
+                  <p className="muted">Laporan: {new Date(deviceDiagnostics.reported_at).toLocaleString("id-ID")}{Date.now() - new Date(deviceDiagnostics.reported_at).getTime() > offlineThresholdMs ? " · data mungkin sudah lama" : ""}</p>
+                  <p><b>Izin lokasi:</b> {deviceDiagnostics.location_permission ? "Diizinkan" : "Belum diizinkan"}</p>
+                  <p><b>Izin latar belakang:</b> {deviceDiagnostics.background_permission ? "Diizinkan" : "Belum diizinkan"}</p>
+                  <p><b>Foreground service:</b> {deviceDiagnostics.foreground_service ? "Aktif" : "Tidak aktif"}</p>
+                  <p><b>Location services:</b> {deviceDiagnostics.location_services ? "Aktif" : "Nonaktif"}</p>
+                  <p><b>Network saat laporan:</b> {deviceDiagnostics.network_online ? "Online" : "Offline"}</p>
+                  <p><b>Battery optimization:</b> {deviceDiagnostics.battery_optimization_exempt ? "Dikecualikan" : "Aktif"}</p>
+                  <p><b>Antrean upload lokal:</b> {deviceDiagnostics.queued_uploads} dari 500</p>
+                </>}
+              </div>
 
               {["mock", "orange-playground"].includes(locationProviderName) && (
                 <button type="button" className="icon-button" onClick={requestLatestLocation} disabled={requestingLocation}>

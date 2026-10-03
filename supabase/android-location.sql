@@ -23,3 +23,26 @@ create table if not exists public.android_devices (
 create index if not exists android_devices_member_idx on public.android_devices(member_id);
 alter table public.android_devices enable row level security;
 -- No anon policies: only the Edge Functions' service role may read/write this registry.
+
+create table if not exists public.android_device_status (
+  device_id uuid primary key references public.android_devices(device_id) on delete cascade,
+  member_id uuid not null references public.family_members(id) on delete cascade,
+  location_permission boolean not null,
+  background_permission boolean not null,
+  foreground_service boolean not null,
+  location_services boolean not null,
+  network_online boolean not null,
+  battery_optimization_exempt boolean not null,
+  queued_uploads integer not null default 0 check (queued_uploads between 0 and 500),
+  reported_at timestamptz not null default now()
+);
+create index if not exists android_device_status_member_idx on public.android_device_status(member_id);
+alter table public.android_device_status enable row level security;
+drop policy if exists "mvp android device status read" on public.android_device_status;
+create policy "mvp android device status read"
+  on public.android_device_status for select using (true);
+
+do $$ begin
+  alter publication supabase_realtime add table public.android_device_status;
+exception when duplicate_object then null;
+end $$;

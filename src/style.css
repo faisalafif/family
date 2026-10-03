@@ -66,6 +66,10 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .history-list small { width: 100%; color: #667085; font-size: 11px; }
 .provider-status, .provider-message { overflow-wrap: anywhere; margin-top: 10px; }
 .provider-message { padding: 10px 12px; border-radius: 10px; background: #f1f5f9; color: #334155; }
+.device-diagnostics { margin: 14px 0; padding: 12px; border-radius: 10px; background: #f8fafc; }
+.device-diagnostics h3 { margin: 0 0 8px; font-size: 14px; }
+.device-diagnostics p { margin: 6px 0; font-size: 13px; }
+.device-diagnostics .muted { font-size: 11px; }
 .icon-button:disabled { opacity: .65; cursor: wait; }
 @media (max-width: 800px) {
   .layout { grid-template-columns: 1fr; height: auto; }
