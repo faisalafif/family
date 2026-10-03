@@ -1,0 +1,8 @@
+[functions.device-register]
+verify_jwt = false
+
+[functions.android-location-ingest]
+verify_jwt = false
+
+[functions.location-request]
+verify_jwt = true
