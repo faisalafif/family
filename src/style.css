@@ -55,6 +55,9 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .history-block { margin-top: 18px; border-top: 1px solid #eef0f3; padding-top: 14px; }
 .history-block h3 { margin: 0 0 12px; font-size: 15px; }
 .history-date-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.history-hour-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.history-hour-filters select { font-size: 12px; }
+.history-filter-hint { margin: -4px 0 10px; }
 .history-date-filters input { padding: 9px 8px; font-size: 12px; }
 .history-reset-button { width: 100%; padding: 8px 10px; margin: 0 0 10px; border: 1px solid #d0d5dd; border-radius: 8px; background: white; color: #475467; font-size: 12px; }
 .history-reset-button:disabled { opacity: .5; cursor: default; }
@@ -66,6 +69,23 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .history-list strong { font-size: 12px; }
 .history-list li { flex-wrap: wrap; }
 .history-list small { width: 100%; color: #667085; font-size: 11px; }
+.history-list li.history-entry { display: block; padding: 0 !important; overflow: hidden; border: 1px solid transparent; }
+.history-entry.selected { border-color: #2563eb; background: #eff6ff; box-shadow: 0 0 0 2px rgba(37,99,235,.12); }
+.history-card-button { display: flex; width: 100%; flex-wrap: wrap; justify-content: space-between; gap: 8px 12px; padding: 10px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.history-card-button:hover { background: #f1f5f9; }
+.history-entry.selected .history-card-button:hover { background: #eff6ff; }
+.history-card-button:disabled { cursor: default; }
+.history-card-button span { color: #667085; font-size: 12px; }
+.history-card-button strong { font-size: 12px; }
+.history-card-button small { width: 100%; color: #667085; font-size: 11px; }
+.history-expand-button { margin: 0 10px 10px; padding: 5px 0; background: transparent; color: #2563eb; font-size: 11px; }
+.history-raw-records { display: grid; gap: 6px; padding: 0 10px 10px; }
+.history-raw-record { display: grid; gap: 3px; padding: 8px; border-radius: 7px; background: white; font-size: 11px; overflow-wrap: anywhere; }
+.history-raw-record small { color: #667085; }
+.history-pagination { display: grid; gap: 8px; margin: 10px 0; color: #667085; font-size: 12px; }
+.history-pagination > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.history-pagination button { padding: 7px 9px; border: 1px solid #d0d5dd; border-radius: 7px; background: white; color: #344054; }
+.history-pagination button:disabled { opacity: .45; cursor: default; }
 .provider-status, .provider-message { overflow-wrap: anywhere; margin-top: 10px; }
 .provider-message { padding: 10px 12px; border-radius: 10px; background: #f1f5f9; color: #334155; }
 .device-diagnostics { margin: 14px 0; padding: 12px; border-radius: 10px; background: #f8fafc; }

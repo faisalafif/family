@@ -6,12 +6,14 @@ import L from "leaflet";
 import "./style.css";
 import { createLocationProvider, getProviderStatus, LocationProviderError } from "./location/providers.js";
 import { persistLocationResult } from "./location/persistence.js";
+import { isInJakartaDateTimeRange, jakartaDateInputValue, jakartaMidnightUtc, nextDateInputValue } from "./location/history-time.js";
 
 const locationProviderName = import.meta.env.VITE_LOCATION_PROVIDER || "unavailable";
 const onlineThresholdMinutes = Math.max(1, Number(import.meta.env.VITE_LOCATION_ONLINE_MINUTES) || 2);
 const offlineThresholdMinutes = Math.max(onlineThresholdMinutes + 1, Number(import.meta.env.VITE_LOCATION_OFFLINE_MINUTES) || 10);
 const onlineThresholdMs = onlineThresholdMinutes * 60_000;
 const offlineThresholdMs = offlineThresholdMinutes * 60_000;
+const historyPageSize = 20;
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -35,6 +37,13 @@ function locationSourceLabel(row) {
   if (source === "TELCO") return "Telco Network";
   if (source === "MOCK" || provider === "mock") return "SIMULASI";
   return source || provider ? "Last known location" : "Browser GPS (legacy)";
+}
+
+function hasValidCoordinates(row) {
+  if (row?.latitude == null || row?.longitude == null || row.latitude === "" || row.longitude === "") return false;
+  const latitude = Number(row?.latitude);
+  const longitude = Number(row?.longitude);
+  return Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
 }
 
 function RefreshIcon() {
@@ -79,13 +88,27 @@ function Dashboard() {
   const [requestingLocation, setRequestingLocation] = useState(false);
   const [providerMessage, setProviderMessage] = useState("");
   const [historyFilter, setHistoryFilter] = useState("ALL");
-  const [historyStartDate, setHistoryStartDate] = useState("");
-  const [historyEndDate, setHistoryEndDate] = useState("");
+  const [historyInterval, setHistoryInterval] = useState("1");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [selectedHistoryId, setSelectedHistoryId] = useState(null);
+  const [expandedHistoryGroups, setExpandedHistoryGroups] = useState(() => new Set());
+  const [historyStartDate, setHistoryStartDate] = useState(() => jakartaDateInputValue());
+  const [historyEndDate, setHistoryEndDate] = useState(() => jakartaDateInputValue());
+  const [historyStartHour, setHistoryStartHour] = useState("ALL");
+  const [historyEndHour, setHistoryEndHour] = useState("ALL");
   const [clockNow, setClockNow] = useState(Date.now());
+  const historyQueryFiltersRef = useRef(null);
+  const selectedMemberIdRef = useRef(selected?.id);
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const markerRef = useRef(null);
   const historyRouteRef = useRef(null);
+  const historyMarkersRef = useRef(null);
+  const historyMarkerByIdRef = useRef(new Map());
+  const historyCardRefs = useRef(new Map());
+  const historyRequestSequenceRef = useRef(0);
+  historyQueryFiltersRef.current = { historyStartDate, historyEndDate, historyStartHour, historyEndHour };
+  selectedMemberIdRef.current = selected?.id;
 
   async function loadMembers() {
     if (!supabase) return;
@@ -112,8 +135,12 @@ function Dashboard() {
   }
 
   async function loadLocationHistory(memberId) {
+    if (memberId && memberId !== selectedMemberIdRef.current) return;
+    const requestSequence = ++historyRequestSequenceRef.current;
+    const { historyStartDate: startDate, historyEndDate: endDate, historyStartHour: startHour, historyEndHour: endHour } = historyQueryFiltersRef.current;
     if (!supabase || !memberId) {
       setLocationHistory([]);
+      setHistoryLoading(false);
       return;
     }
 
@@ -125,20 +152,28 @@ function Dashboard() {
         .eq("member_id", memberId)
         .order("recorded_at", { ascending: false });
 
-      if (historyStartDate) query = query.gte("recorded_at", new Date(`${historyStartDate}T00:00:00`).toISOString());
-      if (historyEndDate) {
-        const exclusiveEnd = new Date(`${historyEndDate}T00:00:00`);
-        exclusiveEnd.setDate(exclusiveEnd.getDate() + 1);
-        query = query.lt("recorded_at", exclusiveEnd.toISOString());
+      const startBoundary = jakartaMidnightUtc(startDate);
+      if (startBoundary) query = query.gte("recorded_at", startBoundary);
+      const crossesMidnight = startHour !== "ALL" && endHour !== "ALL" && Number(startHour) > Number(endHour);
+      let dayAfterEnd = nextDateInputValue(endDate);
+      if (crossesMidnight && dayAfterEnd) dayAfterEnd = nextDateInputValue(dayAfterEnd);
+      const endBoundary = dayAfterEnd && jakartaMidnightUtc(dayAfterEnd);
+      if (endBoundary) query = query.lt("recorded_at", endBoundary);
+
+      const batchSize = 1000;
+      const allRows = [];
+      for (let offset = 0; ; offset += batchSize) {
+        const { data, error } = await query.range(offset, offset + batchSize - 1);
+        if (error) throw error;
+        const batch = data || [];
+        allRows.push(...batch);
+        if (batch.length < batchSize) break;
       }
-
-      const { data, error } = await query.limit(historyStartDate || historyEndDate ? 1000 : 120);
-
-      if (!error) setLocationHistory(data || []);
+      if (requestSequence === historyRequestSequenceRef.current) setLocationHistory(allRows);
     } catch (err) {
-      console.error("Failed to load location history", err);
+      if (requestSequence === historyRequestSequenceRef.current) console.error("Failed to load location history", err);
     } finally {
-      setHistoryLoading(false);
+      if (requestSequence === historyRequestSequenceRef.current) setHistoryLoading(false);
     }
   }
 
@@ -186,7 +221,7 @@ function Dashboard() {
       });
       result = await provider.getLatestLocation({ phoneNumber: selected.phone, memberId: selected.id });
       const recordedAt = await persistLocationResult(supabase, selected.id, result);
-      setProviderMessage(`${result.provider === "mock" ? "SIMULASI — bukan lokasi nyata. " : ""}Lokasi diterima ${new Date(recordedAt).toLocaleTimeString("id-ID")}${result.accuracy ? ` · akurasi ±${Math.round(result.accuracy)} m` : ""}`);
+      setProviderMessage(`${result.provider === "mock" ? "SIMULASI — bukan lokasi nyata. " : ""}Lokasi diterima ${new Date(recordedAt).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}${result.accuracy ? ` · akurasi ±${Math.round(result.accuracy)} m` : ""}`);
       await loadMembers();
       await loadLocationHistory(selected.id);
     } catch (error) {
@@ -252,6 +287,7 @@ function Dashboard() {
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(mapInstance.current);
     historyRouteRef.current = L.layerGroup().addTo(mapInstance.current);
+    historyMarkersRef.current = L.layerGroup().addTo(mapInstance.current);
   }, []);
 
   useEffect(() => {
@@ -262,23 +298,30 @@ function Dashboard() {
     const latLng = [selected.latitude, selected.longitude];
     const contactAt = selected.last_source === "ANDROID" && selected.device_seen_at ? selected.device_seen_at : selected.last_seen;
     const ageMs = contactAt ? Math.max(0, clockNow - new Date(contactAt).getTime()) : Infinity;
-    mapInstance.current.setView(latLng, 16);
+    const todayDate = jakartaDateInputValue(new Date(clockNow));
+    const shouldFocusLatest = !selectedHistoryId && historyStartDate === todayDate && historyEndDate === todayDate;
+    if (shouldFocusLatest) mapInstance.current.setView(latLng, 16);
 
-    if (markerRef.current) markerRef.current.remove();
-
-    markerRef.current = L.marker(latLng)
-      .addTo(mapInstance.current)
-      .bindPopup(`<b>${selected.name}</b><br/>${locationSourceLabel(selected)}<br/>Accuracy: ±${Math.round(selected.accuracy || 0)} m<br/>${ageMs >= offlineThresholdMs ? "Last known location · OFFLINE" : `Updated: ${selected.last_seen ? new Date(selected.last_seen).toLocaleTimeString() : "unknown"}`}`)
-      .openPopup();
-  }, [selected]);
+    const popup = `<b>${selected.name}</b><br/>${locationSourceLabel(selected)}<br/>Accuracy: +/-${Math.round(selected.accuracy || 0)} m<br/>${ageMs >= offlineThresholdMs ? "Last known location - OFFLINE" : `Updated: ${selected.last_seen ? new Date(selected.last_seen).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" }) : "unknown"}`}`;
+    if (markerRef.current) {
+      markerRef.current.setLatLng(latLng).setPopupContent(popup);
+      if (shouldFocusLatest) markerRef.current.openPopup();
+    } else {
+      markerRef.current = L.marker(latLng).addTo(mapInstance.current).bindPopup(popup);
+      if (shouldFocusLatest) markerRef.current.openPopup();
+    }
+  }, [selected, selectedHistoryId, historyStartDate, historyEndDate, clockNow]);
 
   useEffect(() => {
     const routeLayer = historyRouteRef.current;
-    if (!routeLayer) return;
+    const markerLayer = historyMarkersRef.current;
+    if (!routeLayer || !markerLayer) return;
     routeLayer.clearLayers();
+    markerLayer.clearLayers();
+    historyMarkerByIdRef.current.clear();
 
-    const chronological = filteredHistory
-      .filter(item => item.latitude != null && item.longitude != null && Number.isFinite(Number(item.latitude)) && Number.isFinite(Number(item.longitude)))
+    const chronological = displayHistory
+      .filter(item => hasValidCoordinates(item))
       .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
     const points = chronological.map(item => [Number(item.latitude), Number(item.longitude)]);
 
@@ -289,31 +332,56 @@ function Dashboard() {
     chronological.forEach((item, index) => {
       const point = L.circleMarker(points[index], {
         radius: index === 0 || index === chronological.length - 1 ? 7 : 4,
-        color: index === 0 ? "#15803d" : index === chronological.length - 1 ? "#b91c1c" : "#1d4ed8",
+        color: item.id === selectedHistoryId ? "#7c3aed" : index === 0 ? "#15803d" : index === chronological.length - 1 ? "#b91c1c" : "#1d4ed8",
         weight: 2,
-        fillColor: "#ffffff",
+        fillColor: item.id === selectedHistoryId ? "#ddd6fe" : "#ffffff",
         fillOpacity: 1
-      }).addTo(routeLayer);
+      }).addTo(markerLayer);
       const popup = document.createElement("div");
       const time = document.createElement("strong");
-      time.textContent = new Date(item.recorded_at).toLocaleString("id-ID");
+      time.textContent = new Date(item.recorded_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
       const coords = document.createElement("div");
       coords.textContent = `${Number(item.latitude).toFixed(6)}, ${Number(item.longitude).toFixed(6)}`;
       const endpoint = document.createElement("div");
+      const source = document.createElement("div");
+      source.textContent = `${locationSourceLabel(item)}${Number.isFinite(Number(item.accuracy)) && Number(item.accuracy) > 0 ? ` · ±${Math.round(Number(item.accuracy))} m` : ""}`;
       endpoint.textContent = index === 0 ? "Titik awal" : index === chronological.length - 1 ? "Titik terbaru" : `Titik ${index + 1}`;
-      popup.append(time, coords, endpoint);
+      popup.append(time, coords, source, endpoint);
       point.bindPopup(popup);
+      point.on("click", () => {
+        setSelectedHistoryId(item.id);
+        const displayIndex = displayHistory.findIndex(record => record.id === item.id);
+        if (displayIndex >= 0) setHistoryPage(Math.floor(displayIndex / historyPageSize) + 1);
+        const card = historyCardRefs.current.get(item.id);
+        card?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
+      historyMarkerByIdRef.current.set(item.id, point);
     });
-  }, [locationHistory, historyFilter]);
+  }, [locationHistory, historyFilter, historyInterval, selectedHistoryId, historyStartDate, historyEndDate, historyStartHour, historyEndHour, clockNow]);
+
+  useEffect(() => {
+    if (!selectedHistoryId) return;
+    const marker = historyMarkerByIdRef.current.get(selectedHistoryId);
+    const selectedRecord = displayHistory.find(item => item.id === selectedHistoryId);
+    if (!marker || !selectedRecord || !mapInstance.current) return;
+    mapInstance.current.flyTo([Number(selectedRecord.latitude), Number(selectedRecord.longitude)], Math.max(17, Math.min(19, mapInstance.current.getZoom() < 17 ? 17 : mapInstance.current.getZoom())), { duration: 0.5 });
+    marker.openPopup();
+  }, [selectedHistoryId, locationHistory, historyFilter, historyInterval, historyStartDate, historyEndDate, historyStartHour, historyEndHour, clockNow]);
+
+  useEffect(() => {
+    if (selectedHistoryId) historyCardRefs.current.get(selectedHistoryId)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [selectedHistoryId, historyPage]);
 
   useEffect(() => {
     if (!selected?.id) {
+      historyRequestSequenceRef.current += 1;
       setLocationHistory([]);
+      setHistoryLoading(false);
       return;
     }
 
     loadLocationHistory(selected.id);
-  }, [selected?.id, historyStartDate, historyEndDate]);
+  }, [selected?.id, historyStartDate, historyEndDate, historyStartHour, historyEndHour]);
 
   async function addMember(e) {
     e.preventDefault();
@@ -379,12 +447,53 @@ function Dashboard() {
     const isAndroid = item.source === "ANDROID" || item.platform === "ANDROID" || item.provider === "android";
     return historyFilter === "ANDROID" ? isAndroid : !isAndroid;
   });
-  const groupedHistory = filteredHistory.reduce((acc, item) => {
-    const dateKey = new Date(item.recorded_at).toISOString().slice(0, 10);
+  const hourFilteredHistory = filteredHistory.filter(item =>
+    isInJakartaDateTimeRange(item.recorded_at, historyStartDate, historyEndDate, historyStartHour, historyEndHour)
+  );
+  const intervalMinutes = historyInterval === "ALL" ? null : Number(historyInterval);
+  const todayDate = jakartaDateInputValue(new Date(clockNow));
+  const historyHasDateRange = Boolean(historyStartDate || historyEndDate);
+  const historyIsTodayRange = historyStartDate === todayDate && historyEndDate === todayDate;
+  const lookbackMs = intervalMinutes != null && intervalMinutes >= 30 && (!historyHasDateRange || historyIsTodayRange)
+    ? intervalMinutes * 60_000
+    : null;
+  const intervalMs = intervalMinutes == null || intervalMinutes >= 30 ? null : intervalMinutes * 60_000;
+  const historyGroups = new Map();
+  for (const item of hourFilteredHistory) {
+    const time = new Date(item.recorded_at).getTime();
+    if (!Number.isFinite(time)) continue;
+    if (lookbackMs != null && time < clockNow - lookbackMs) continue;
+    const sessionAxis = [item.member_id, item.source || "", item.provider || "", item.platform || ""].join("|");
+    const key = intervalMs ? `${sessionAxis}|${Math.floor(time / intervalMs)}` : `${sessionAxis}|${item.id}`;
+    if (!historyGroups.has(key)) historyGroups.set(key, []);
+    historyGroups.get(key).push(item);
+  }
+  const displayHistory = [...historyGroups.values()].map(records => {
+    const validAccuracy = records.filter(item => Number.isFinite(Number(item.accuracy)) && Number(item.accuracy) > 0);
+    const candidates = validAccuracy.length ? validAccuracy : records;
+    const representative = [...candidates].sort((a, b) => {
+      if (validAccuracy.length && Number(a.accuracy) !== Number(b.accuracy)) return Number(a.accuracy) - Number(b.accuracy);
+      const timeDiff = new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime();
+      return timeDiff || String(a.id).localeCompare(String(b.id));
+    })[0];
+    return representative ? { ...representative, rawRecords: records } : null;
+  }).filter(Boolean).sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
+  const visibleIds = new Set(displayHistory.map(item => item.id));
+  const pageCount = Math.max(1, Math.ceil(displayHistory.length / historyPageSize));
+  const currentHistoryPage = Math.min(historyPage, pageCount);
+  const paginatedHistory = displayHistory.slice((currentHistoryPage - 1) * historyPageSize, currentHistoryPage * historyPageSize);
+  const groupedHistory = paginatedHistory.reduce((acc, item) => {
+    const dateKey = jakartaDateInputValue(new Date(item.recorded_at));
     if (!acc[dateKey]) acc[dateKey] = [];
     acc[dateKey].push(item);
     return acc;
   }, {});
+  useEffect(() => {
+    if (selectedHistoryId && !visibleIds.has(selectedHistoryId)) setSelectedHistoryId(null);
+  }, [selectedHistoryId, locationHistory, historyFilter, historyInterval, historyStartDate, historyEndDate, historyStartHour, historyEndHour, clockNow]);
+  useEffect(() => {
+    if (historyPage > pageCount) setHistoryPage(pageCount);
+  }, [historyPage, pageCount]);
 
   return (
     <div className="app">
@@ -414,7 +523,7 @@ function Dashboard() {
               <button
                 className={`member ${selected?.id === m.id ? "active" : ""}`}
                 key={m.id}
-                onClick={() => setSelected(m)}
+                onClick={() => { setHistoryPage(1); setSelected(m); }}
               >
                 <span className="dot" />
                 <span>
@@ -434,7 +543,7 @@ function Dashboard() {
                   : "No location yet"}
               </p>
               <p><b>Accuracy:</b> {selected.accuracy ? `±${Math.round(selected.accuracy)} m` : "-"}</p>
-              <p><b>Last update:</b> {selected.last_seen ? new Date(selected.last_seen).toLocaleString() : "-"}</p>
+              <p><b>Last update:</b> {selected.last_seen ? new Date(selected.last_seen).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) : "-"}</p>
               {selected.last_seen && (() => {
                 const contactAt = selected.last_source === "ANDROID" && selected.device_seen_at ? selected.device_seen_at : selected.last_seen;
                 const ageMs = Math.max(0, clockNow - new Date(contactAt).getTime());
@@ -462,7 +571,7 @@ function Dashboard() {
               <div className="device-diagnostics">
                 <h3>Diagnostik Android</h3>
                 {deviceDiagnosticsError ? <p className="muted">Gagal memuat diagnostik: {deviceDiagnosticsError}. Jalankan ulang supabase/android-location.sql di Supabase SQL Editor.</p> : !deviceDiagnostics ? <p className="muted">Belum ada laporan diagnostik. Pasang APK Android terbaru, deploy ulang android-location-ingest, lalu tunggu Android mengirim lokasi berikutnya.</p> : <>
-                  <p className="muted">Laporan: {new Date(deviceDiagnostics.reported_at).toLocaleString("id-ID")}{Date.now() - new Date(deviceDiagnostics.reported_at).getTime() > offlineThresholdMs ? " · data mungkin sudah lama" : ""}</p>
+                  <p className="muted">Laporan: {new Date(deviceDiagnostics.reported_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}{Date.now() - new Date(deviceDiagnostics.reported_at).getTime() > offlineThresholdMs ? " · data mungkin sudah lama" : ""}</p>
                   <p><b>Izin lokasi:</b> {deviceDiagnostics.location_permission ? "Diizinkan" : "Belum diizinkan"}</p>
                   <p><b>Izin latar belakang:</b> {deviceDiagnostics.background_permission ? "Diizinkan" : "Belum diizinkan"}</p>
                   <p><b>Foreground service:</b> {deviceDiagnostics.foreground_service ? "Aktif · layanan lokasi berjalan di latar dengan notifikasi persisten" : "Tidak aktif · lokasi latar tidak sedang dipantau"}</p>
@@ -491,31 +600,76 @@ function Dashboard() {
                 <div className="history-date-filters">
                   <div>
                     <label htmlFor="history-start-date">Dari tanggal</label>
-                    <input id="history-start-date" type="date" value={historyStartDate} max={historyEndDate || undefined} onChange={event => setHistoryStartDate(event.target.value)} />
+                    <input id="history-start-date" type="date" value={historyStartDate} max={historyEndDate || undefined} onChange={event => { setHistoryPage(1); setHistoryStartDate(event.target.value); }} />
                   </div>
                   <div>
                     <label htmlFor="history-end-date">Sampai tanggal</label>
-                    <input id="history-end-date" type="date" value={historyEndDate} min={historyStartDate || undefined} onChange={event => setHistoryEndDate(event.target.value)} />
+                    <input id="history-end-date" type="date" value={historyEndDate} min={historyStartDate || undefined} onChange={event => { setHistoryPage(1); setHistoryEndDate(event.target.value); }} />
                   </div>
                 </div>
                 <button
                   type="button"
                   className="history-reset-button"
                   onClick={() => {
-                    setHistoryStartDate("");
-                    setHistoryEndDate("");
+                    setHistoryStartDate(todayDate);
+                    setHistoryEndDate(todayDate);
                     setHistoryFilter("ALL");
+                    setHistoryInterval("1");
+                    setHistoryStartHour("ALL");
+                    setHistoryEndHour("ALL");
+                    setHistoryPage(1);
                   }}
-                  disabled={!historyStartDate && !historyEndDate && historyFilter === "ALL"}
+                  disabled={historyStartDate === todayDate && historyEndDate === todayDate && historyFilter === "ALL" && historyInterval === "1" && historyStartHour === "ALL" && historyEndHour === "ALL"}
                 >
                   Reset filter
                 </button>
                 <label htmlFor="history-source-filter">Source</label>
-                <select id="history-source-filter" value={historyFilter} onChange={event => setHistoryFilter(event.target.value)}>
+                <select id="history-source-filter" value={historyFilter} onChange={event => { setHistoryPage(1); setHistoryFilter(event.target.value); }}>
                   <option value="ALL">All</option>
                   <option value="ANDROID">Android</option>
                   <option value="BROWSER">Browser</option>
                 </select>
+                <label htmlFor="history-interval-filter">Interval tampilan</label>
+                <select id="history-interval-filter" value={historyInterval} onChange={event => { setHistoryPage(1); setHistoryInterval(event.target.value); }}>
+                  <option value="ALL">Semua titik</option>
+                  <option value="1">1 menit</option>
+                  <option value="5">5 menit</option>
+                  <option value="15">15 menit</option>
+                  <option value="30">30 menit terakhir</option>
+                  <option value="60">1 jam terakhir</option>
+                  <option value="120">2 jam terakhir</option>
+                  <option value="180">3 jam terakhir</option>
+                  <option value="240">4 jam terakhir</option>
+                  <option value="300">5 jam terakhir</option>
+                </select>
+                {Number(historyInterval) >= 30 && <p className="muted history-filter-hint">{historyIsTodayRange || !historyHasDateRange ? `Menampilkan titik mentah dari ${Number(historyInterval) === 30 ? "30 menit" : `${Number(historyInterval) / 60} jam`} terakhir, selama hari ini.` : "Filter tanggal aktif: menampilkan titik mentah pada tanggal terpilih."}</p>}
+                <div className="history-hour-filters">
+                  <div>
+                    <label htmlFor="history-start-hour">Dari jam</label>
+                    <select id="history-start-hour" value={historyStartHour} onChange={event => { setHistoryPage(1); setHistoryStartHour(event.target.value); }}>
+                      <option value="ALL">Semua jam</option>
+                      {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={String(hour)}>{String(hour).padStart(2, "0")}:00</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="history-end-hour">Sampai jam</label>
+                    <select id="history-end-hour" value={historyEndHour} onChange={event => { setHistoryPage(1); setHistoryEndHour(event.target.value); }}>
+                      <option value="ALL">Semua jam</option>
+                      {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={String(hour)}>{String(hour).padStart(2, "0")}:00 (batas akhir)</option>)}
+                    </select>
+                  </div>
+                </div>
+                {(historyStartHour !== "ALL" || historyEndHour !== "ALL") && <p className="muted history-filter-hint">
+                  Jam memakai waktu Asia/Jakarta. Batas mulai termasuk, batas akhir tidak termasuk (22:00–23:00 berarti hanya jam 22). Jika melewati tengah malam, misalnya 22:00–02:00, bagian setelah tengah malam dihitung pada hari berikutnya.
+                </p>}
+                {displayHistory.length > historyPageSize && <nav className="history-pagination" aria-label="Halaman riwayat lokasi">
+                  <span>Menampilkan {(currentHistoryPage - 1) * historyPageSize + 1}-{Math.min(currentHistoryPage * historyPageSize, displayHistory.length)} dari {displayHistory.length} grup</span>
+                  <div>
+                    <button type="button" onClick={() => setHistoryPage(page => Math.max(1, page - 1))} disabled={currentHistoryPage <= 1}>Sebelumnya</button>
+                    <span>Halaman {currentHistoryPage} dari {pageCount}</span>
+                    <button type="button" onClick={() => setHistoryPage(page => Math.min(pageCount, page + 1))} disabled={currentHistoryPage >= pageCount}>Berikutnya</button>
+                  </div>
+                </nav>}
                 {historyLoading && <p className="muted">Loading history...</p>}
                 {!historyLoading && Object.keys(groupedHistory).length === 0 && (
                   <p className="muted">Belum ada riwayat lokasi.</p>
@@ -524,7 +678,8 @@ function Dashboard() {
                 {!historyLoading && Object.entries(groupedHistory).map(([dateKey, items]) => (
                   <div key={dateKey} className="history-day">
                     <div className="history-date">
-                      {new Date(`${dateKey}T00:00:00`).toLocaleDateString("id-ID", {
+                      {new Date(jakartaMidnightUtc(dateKey)).toLocaleDateString("id-ID", {
+                        timeZone: "Asia/Jakarta",
                         day: "2-digit",
                         month: "short",
                         year: "numeric"
@@ -533,15 +688,31 @@ function Dashboard() {
 
                     <ul className="history-list">
                       {items.map(item => (
-                        <li key={item.id}>
-                          <span>{new Date(item.recorded_at).toLocaleTimeString("id-ID", {
-                            hour: "2-digit",
-                            minute: "2-digit"
-                          })}</span>
-                          <strong>
-                            {item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}
-                          </strong>
-                          <small>{locationSourceLabel(item)}{item.accuracy ? ` · ±${Math.round(item.accuracy)} m` : ""}</small>
+                        <li key={item.id} ref={node => node ? historyCardRefs.current.set(item.id, node) : historyCardRefs.current.delete(item.id)} className={`history-entry ${selectedHistoryId === item.id ? "selected" : ""}`}>
+                          <button type="button" className="history-card-button" disabled={!hasValidCoordinates(item)} onClick={() => {
+                            setSelectedHistoryId(item.id);
+                            historyMarkerByIdRef.current.get(item.id)?.openPopup();
+                            if (hasValidCoordinates(item) && mapInstance.current) mapInstance.current.flyTo([Number(item.latitude), Number(item.longitude)], Math.max(17, Math.min(19, mapInstance.current.getZoom() < 17 ? 17 : mapInstance.current.getZoom())), { duration: 0.5 });
+                          }}>
+                            <span>{new Date(item.recorded_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                            <strong>{hasValidCoordinates(item) ? `${Number(item.latitude).toFixed(5)}, ${Number(item.longitude).toFixed(5)}` : "Koordinat tidak valid"}</strong>
+                            <small>{locationSourceLabel(item)}{Number.isFinite(Number(item.accuracy)) && Number(item.accuracy) > 0 ? `; akurasi: ${Math.round(Number(item.accuracy))} m` : ""}</small>
+                            {item.rawRecords.length > 1 && <small>{item.rawRecords.length} rekaman dalam grup - titik terbaik ditampilkan</small>}
+                          </button>
+                          {item.rawRecords.length > 1 && <>
+                            <button type="button" className="history-expand-button" aria-expanded={expandedHistoryGroups.has(item.id)} onClick={() => setExpandedHistoryGroups(previous => {
+                              const next = new Set(previous);
+                              if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                              return next;
+                            })}>{expandedHistoryGroups.has(item.id) ? "Sembunyikan titik mentah" : "Lihat titik mentah"}</button>
+                            {expandedHistoryGroups.has(item.id) && <div className="history-raw-records">
+                              {item.rawRecords.map(raw => <div key={raw.id} className="history-raw-record">
+                                <strong>{new Date(raw.recorded_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</strong>
+                                <span>{hasValidCoordinates(raw) ? `${Number(raw.latitude).toFixed(6)}, ${Number(raw.longitude).toFixed(6)}` : "Koordinat tidak valid"}</span>
+                                <small>{locationSourceLabel(raw)}{Number.isFinite(Number(raw.accuracy)) && Number(raw.accuracy) > 0 ? `; akurasi: ${Math.round(Number(raw.accuracy))} m` : " - akurasi tidak tersedia"}</small>
+                              </div>)}
+                            </div>}
+                          </>}
                         </li>
                       ))}
                     </ul>
@@ -614,7 +785,7 @@ function Tracker({ token }) {
       return;
     }
 
-    setStatus(`Lokasi terkirim ${new Date(position.timestamp).toLocaleTimeString()}`);
+    setStatus(`Lokasi terkirim ${new Date(position.timestamp).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}`);
   }
 
   function requestCurrentLocation() {
