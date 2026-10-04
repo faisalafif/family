@@ -8,6 +8,7 @@ import { createLocationProvider, getProviderStatus, LocationProviderError } from
 import { persistLocationResult } from "./location/persistence.js";
 import { isInJakartaDateTimeRange, jakartaDateInputValue, jakartaMidnightUtc, nextDateInputValue } from "./location/history-time.js";
 import { buildRouteSegments } from "./location/map-route.js";
+import { groupHistoryRecords, isWithinRelativeWindow } from "./location/history-groups.js";
 
 const locationProviderName = import.meta.env.VITE_LOCATION_PROVIDER || "unavailable";
 const onlineThresholdMinutes = Math.max(1, Number(import.meta.env.VITE_LOCATION_ONLINE_MINUTES) || 2);
@@ -91,31 +92,39 @@ function Dashboard() {
   const [providerMessage, setProviderMessage] = useState("");
   const [historyFilter, setHistoryFilter] = useState("ALL");
   const [historyInterval, setHistoryInterval] = useState("1");
+  const [historyRangeMode, setHistoryRangeMode] = useState("absolute");
   const [mapMode, setMapMode] = useState("route");
   const [historySheetState, setHistorySheetState] = useState("peek");
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [selectedHistoryId, setSelectedHistoryId] = useState(null);
+  const [selectedHistoryRecordId, setSelectedHistoryRecordId] = useState(null);
   const [selectedRawRecordId, setSelectedRawRecordId] = useState(null);
+  const [historySelectionNotice, setHistorySelectionNotice] = useState("");
+  const [historyPopupOpen, setHistoryPopupOpen] = useState(false);
   const [expandedHistoryGroups, setExpandedHistoryGroups] = useState(() => new Set());
   const [historyStartDate, setHistoryStartDate] = useState(() => jakartaDateInputValue());
   const [historyEndDate, setHistoryEndDate] = useState(() => jakartaDateInputValue());
   const [historyStartHour, setHistoryStartHour] = useState("ALL");
   const [historyEndHour, setHistoryEndHour] = useState("ALL");
   const [clockNow, setClockNow] = useState(Date.now());
+  const historyFilterClock = historyRangeMode === "relative" ? clockNow : 0;
   const historyQueryFiltersRef = useRef(null);
   const selectedMemberIdRef = useRef(selected?.id);
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const markerRef = useRef(null);
+  const focusedHistorySelectionRef = useRef(null);
   const historyRouteRef = useRef(null);
   const historyMarkersRef = useRef(null);
   const historyMarkerByIdRef = useRef(new Map());
   const historyCardRefs = useRef(new Map());
+  const historyLayerRebuildRef = useRef(false);
+  const historyPopupSelectionKeyRef = useRef(null);
   const sheetPointerStartRef = useRef(null);
   const suppressSheetClickRef = useRef(false);
   const historyRequestSequenceRef = useRef(0);
-  historyQueryFiltersRef.current = { historyStartDate, historyEndDate, historyStartHour, historyEndHour };
+  historyQueryFiltersRef.current = { historyStartDate, historyEndDate, historyStartHour, historyEndHour, historyRangeMode, historyInterval };
   selectedMemberIdRef.current = selected?.id;
 
   async function loadMembers() {
@@ -145,7 +154,7 @@ function Dashboard() {
   async function loadLocationHistory(memberId) {
     if (memberId && memberId !== selectedMemberIdRef.current) return;
     const requestSequence = ++historyRequestSequenceRef.current;
-    const { historyStartDate: startDate, historyEndDate: endDate, historyStartHour: startHour, historyEndHour: endHour } = historyQueryFiltersRef.current;
+    const { historyStartDate: startDate, historyEndDate: endDate, historyStartHour: startHour, historyEndHour: endHour, historyRangeMode: rangeMode, historyInterval: interval } = historyQueryFiltersRef.current;
     if (!supabase || !memberId) {
       setLocationHistory([]);
       setHistoryLoading(false);
@@ -160,13 +169,19 @@ function Dashboard() {
         .eq("member_id", memberId)
         .order("recorded_at", { ascending: false });
 
-      const startBoundary = jakartaMidnightUtc(startDate);
-      if (startBoundary) query = query.gte("recorded_at", startBoundary);
-      const crossesMidnight = startHour !== "ALL" && endHour !== "ALL" && Number(startHour) > Number(endHour);
-      let dayAfterEnd = nextDateInputValue(endDate);
-      if (crossesMidnight && dayAfterEnd) dayAfterEnd = nextDateInputValue(dayAfterEnd);
-      const endBoundary = dayAfterEnd && jakartaMidnightUtc(dayAfterEnd);
-      if (endBoundary) query = query.lt("recorded_at", endBoundary);
+      if (rangeMode === "relative") {
+        const upperBound = new Date();
+        const lowerBound = new Date(upperBound.getTime() - Number(interval) * 60_000);
+        query = query.gte("recorded_at", lowerBound.toISOString()).lte("recorded_at", upperBound.toISOString());
+      } else {
+        const startBoundary = jakartaMidnightUtc(startDate);
+        if (startBoundary) query = query.gte("recorded_at", startBoundary);
+        const crossesMidnight = startHour !== "ALL" && endHour !== "ALL" && Number(startHour) > Number(endHour);
+        let dayAfterEnd = nextDateInputValue(endDate);
+        if (crossesMidnight && dayAfterEnd) dayAfterEnd = nextDateInputValue(dayAfterEnd);
+        const endBoundary = dayAfterEnd && jakartaMidnightUtc(dayAfterEnd);
+        if (endBoundary) query = query.lt("recorded_at", endBoundary);
+      }
 
       const batchSize = 1000;
       const allRows = [];
@@ -177,7 +192,9 @@ function Dashboard() {
         allRows.push(...batch);
         if (batch.length < batchSize) break;
       }
-      if (requestSequence === historyRequestSequenceRef.current) setLocationHistory(allRows);
+      if (requestSequence === historyRequestSequenceRef.current) {
+        setLocationHistory([...new Map(allRows.map(row => [row.id, row])).values()]);
+      }
     } catch (err) {
       if (requestSequence === historyRequestSequenceRef.current) console.error("Failed to load location history", err);
     } finally {
@@ -306,31 +323,36 @@ function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (!selected || !mapInstance.current) return;
-
-    if (selected.latitude == null || selected.longitude == null) return;
+    if (!mapInstance.current) return;
+    if (!selected || selected.latitude == null || selected.longitude == null) {
+      markerRef.current?.remove();
+      markerRef.current = null;
+      return;
+    }
 
     const latLng = [selected.latitude, selected.longitude];
     const contactAt = selected.last_source === "ANDROID" && selected.device_seen_at ? selected.device_seen_at : selected.last_seen;
     const ageMs = contactAt ? Math.max(0, clockNow - new Date(contactAt).getTime()) : Infinity;
-    const todayDate = jakartaDateInputValue(new Date(clockNow));
-    const shouldFocusLatest = !selectedHistoryId && historyStartDate === todayDate && historyEndDate === todayDate;
-    if (shouldFocusLatest) mapInstance.current.setView(latLng, 16);
 
     const popup = `<b>${selected.name}</b><br/>${locationSourceLabel(selected)}<br/>Accuracy: +/-${Math.round(selected.accuracy || 0)} m<br/>${ageMs >= offlineThresholdMs ? "Last known location - OFFLINE" : `Updated: ${selected.last_seen ? new Date(selected.last_seen).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" }) : "unknown"}`}`;
     if (markerRef.current) {
       markerRef.current.setLatLng(latLng).setPopupContent(popup);
-      if (shouldFocusLatest) markerRef.current.openPopup();
     } else {
-      markerRef.current = L.marker(latLng).addTo(mapInstance.current).bindPopup(popup);
-      if (shouldFocusLatest) markerRef.current.openPopup();
+      markerRef.current = L.marker(latLng).addTo(mapInstance.current).bindPopup(popup, { autoPan: false });
     }
-  }, [selected, selectedHistoryId, historyStartDate, historyEndDate, clockNow]);
+  }, [selected, clockNow]);
+
+  useEffect(() => {
+    if (!selected?.id || selected.latitude == null || selected.longitude == null || !mapInstance.current) return;
+    mapInstance.current.setView([Number(selected.latitude), Number(selected.longitude)], 16);
+    markerRef.current?.openPopup();
+  }, [selected?.id]);
 
   useEffect(() => {
     const routeLayer = historyRouteRef.current;
     const markerLayer = historyMarkersRef.current;
     if (!routeLayer || !markerLayer) return;
+    historyLayerRebuildRef.current = true;
     routeLayer.clearLayers();
     markerLayer.clearLayers();
     historyMarkerByIdRef.current.clear();
@@ -371,8 +393,8 @@ function Dashboard() {
       if (!group) return;
       const isRawMode = mapMode === "raw";
       const isSelected = isRawMode
-        ? record.id === selectedRawRecordId || (!selectedRawRecordId && record.id === selectedHistoryId)
-        : record.id === selectedHistoryId;
+        ? record.id === selectedRawRecordId || (!selectedRawRecordId && group.groupId === selectedHistoryId && record.id === group.id)
+        : group.groupId === selectedHistoryId;
       const endpoint = mapMode === "route" ? endpointById.get(record.id) : null;
       const markerColor = isSelected ? "#7c3aed"
         : endpoint?.includes("start") ? "#15803d"
@@ -387,6 +409,21 @@ function Dashboard() {
         fillColor: isSelected ? "#ddd6fe" : "#ffffff",
         fillOpacity: isRawMode ? 0.72 : 0.95
       }).addTo(markerLayer);
+      // Keep the visible dot compact on a dense route, but give touch screens a
+      // larger invisible hit area so individual points can still be selected.
+      const touchTarget = mapInstance.current.getSize().x <= 768
+        ? L.circleMarker([Number(record.latitude), Number(record.longitude)], {
+            renderer,
+            radius: 14,
+            color: "#000000",
+            opacity: 0,
+            weight: 1,
+            fill: true,
+            fillColor: "#000000",
+            fillOpacity: 0.001,
+            interactive: true
+          }).addTo(markerLayer)
+        : marker;
 
       const popup = document.createElement("div");
       const time = document.createElement("strong");
@@ -412,31 +449,51 @@ function Dashboard() {
           : "Route segment boundary";
         popup.append(routeEndpoint);
       }
-      marker.bindPopup(popup);
-      marker.on("click", () => {
-        setSelectedHistoryId(group.id);
+      touchTarget.bindPopup(popup, { autoPan: false });
+      const popupSelectionKey = `${group.groupId}|${record.id}`;
+      touchTarget.on("popupclose", () => {
+        if (historyLayerRebuildRef.current || historyPopupSelectionKeyRef.current !== popupSelectionKey) return;
+        setHistoryPopupOpen(false);
+      });
+      touchTarget.on("click", () => {
+        historyPopupSelectionKeyRef.current = popupSelectionKey;
+        setSelectedHistoryId(group.groupId);
+        setSelectedHistoryRecordId(isRawMode ? group.id : record.id);
         setSelectedRawRecordId(isRawMode ? record.id : null);
         setHistorySheetState(state => state === "expanded" ? "expanded" : "peek");
+        setHistorySelectionNotice("");
+        setHistoryPopupOpen(true);
         if (isRawMode && group.rawRecords.length > 1) {
-          setExpandedHistoryGroups(previous => new Set(previous).add(group.id));
+          setExpandedHistoryGroups(previous => new Set(previous).add(group.groupId));
         }
-        const displayIndex = displayHistory.findIndex(item => item.id === group.id);
+        const displayIndex = displayHistory.findIndex(item => item.groupId === group.groupId);
         if (displayIndex >= 0) setHistoryPage(Math.floor(displayIndex / historyPageSize) + 1);
       });
-      historyMarkerByIdRef.current.set(record.id, marker);
+      historyMarkerByIdRef.current.set(record.id, touchTarget);
     });
-  }, [locationHistory, historyFilter, historyInterval, selectedHistoryId, selectedRawRecordId, mapMode, historyStartDate, historyEndDate, historyStartHour, historyEndHour, clockNow]);
+    historyLayerRebuildRef.current = false;
+  }, [locationHistory, historyFilter, historyInterval, historyRangeMode, selectedHistoryId, selectedRawRecordId, mapMode, historyStartDate, historyEndDate, historyStartHour, historyEndHour, historyFilterClock]);
 
   useEffect(() => {
-    if (!selectedHistoryId) return;
-    const markerId = mapMode === "raw" && selectedRawRecordId ? selectedRawRecordId : selectedHistoryId;
+    if (!selectedHistoryId) {
+      focusedHistorySelectionRef.current = null;
+      return;
+    }
+    const selectedRecord = displayHistory.find(item => item.groupId === selectedHistoryId);
+    const markerId = mapMode === "raw" && selectedRawRecordId ? selectedRawRecordId : selectedHistoryRecordId;
     const marker = historyMarkerByIdRef.current.get(markerId);
-    const selectedRecord = displayHistory.find(item => item.id === selectedHistoryId);
     if (!marker || !selectedRecord || !mapInstance.current) return;
-    const target = marker.getLatLng();
-    mapInstance.current.flyTo([target.lat, target.lng], Math.min(17, Math.max(16, mapInstance.current.getZoom())), { duration: 0.5 });
-    marker.openPopup();
-  }, [selectedHistoryId, selectedRawRecordId, mapMode, locationHistory, historyFilter, historyInterval, historyStartDate, historyEndDate, historyStartHour, historyEndHour, clockNow]);
+    const selectionKey = `${selectedHistoryId}|${mapMode === "raw" ? selectedRawRecordId || "group" : "group"}`;
+    if (focusedHistorySelectionRef.current !== selectionKey) {
+      const target = marker.getLatLng();
+      mapInstance.current.flyTo([target.lat, target.lng], Math.min(17, Math.max(16, mapInstance.current.getZoom())), { duration: 0.5 });
+      focusedHistorySelectionRef.current = selectionKey;
+    }
+    if (historyPopupOpen) {
+      historyPopupSelectionKeyRef.current = `${selectedHistoryId}|${markerId}`;
+      marker.openPopup();
+    }
+  }, [selectedHistoryId, selectedHistoryRecordId, selectedRawRecordId, mapMode, historyPopupOpen, locationHistory, historyFilter, historyInterval, historyRangeMode, historyStartDate, historyEndDate, historyStartHour, historyEndHour, historyFilterClock]);
 
   useEffect(() => {
     if (selectedHistoryId) historyCardRefs.current.get(selectedHistoryId)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -451,7 +508,7 @@ function Dashboard() {
     }
 
     loadLocationHistory(selected.id);
-  }, [selected?.id, historyStartDate, historyEndDate, historyStartHour, historyEndHour]);
+  }, [selected?.id, historyRangeMode, historyInterval, historyStartDate, historyEndDate, historyStartHour, historyEndHour]);
 
   async function addMember(e) {
     e.preventDefault();
@@ -479,6 +536,11 @@ function Dashboard() {
 
     setName("");
     setPhone("");
+    setSelectedHistoryId(null);
+    setSelectedHistoryRecordId(null);
+    setSelectedRawRecordId(null);
+    setHistoryPopupOpen(false);
+    historyPopupSelectionKeyRef.current = null;
     await loadMembers();
     setSelected(data);
   }
@@ -487,6 +549,11 @@ function Dashboard() {
     if (!supabase) return;
     if (!confirm("Delete this family member?")) return;
     await supabase.from("family_members").delete().eq("id", id);
+    setSelectedHistoryId(null);
+    setSelectedHistoryRecordId(null);
+    setSelectedRawRecordId(null);
+    setHistoryPopupOpen(false);
+    historyPopupSelectionKeyRef.current = null;
     setSelected(null);
     loadMembers();
   }
@@ -560,42 +627,21 @@ function Dashboard() {
     const isAndroid = item.source === "ANDROID" || item.platform === "ANDROID" || item.provider === "android";
     return historyFilter === "ANDROID" ? isAndroid : !isAndroid;
   });
-  const hourFilteredHistory = filteredHistory.filter(item =>
+  const hourFilteredHistory = historyRangeMode === "relative" ? filteredHistory : filteredHistory.filter(item =>
     isInJakartaDateTimeRange(item.recorded_at, historyStartDate, historyEndDate, historyStartHour, historyEndHour)
   );
   const intervalMinutes = historyInterval === "ALL" ? null : Number(historyInterval);
   const todayDate = jakartaDateInputValue(new Date(clockNow));
-  const historyHasDateRange = Boolean(historyStartDate || historyEndDate);
-  const historyIsTodayRange = historyStartDate === todayDate && historyEndDate === todayDate;
-  const lookbackMs = intervalMinutes != null && intervalMinutes >= 30 && (!historyHasDateRange || historyIsTodayRange)
-    ? intervalMinutes * 60_000
-    : null;
-  const intervalMs = intervalMinutes == null || intervalMinutes >= 30 ? null : intervalMinutes * 60_000;
+  const relativeMinutes = historyRangeMode === "relative" ? intervalMinutes : null;
+  const intervalMs = intervalMinutes == null || historyRangeMode === "relative" || intervalMinutes >= 30 ? null : intervalMinutes * 60_000;
   const scopedRawHistory = [...new Map(hourFilteredHistory
     .filter(item => {
+      if (historyRangeMode === "relative") return isWithinRelativeWindow(item.recorded_at, clockNow, relativeMinutes);
       const timestamp = new Date(item.recorded_at).getTime();
-      return Number.isFinite(timestamp) && (lookbackMs == null || timestamp >= clockNow - lookbackMs);
+      return Number.isFinite(timestamp);
     })
     .map(item => [item.id, item])).values()];
-  const historyGroups = new Map();
-  for (const item of scopedRawHistory) {
-    const time = new Date(item.recorded_at).getTime();
-    const sessionAxis = [item.member_id, item.source || "", item.provider || "", item.platform || ""].join("|");
-    const key = intervalMs ? `${sessionAxis}|${Math.floor(time / intervalMs)}` : `${sessionAxis}|${item.id}`;
-    if (!historyGroups.has(key)) historyGroups.set(key, []);
-    historyGroups.get(key).push(item);
-  }
-  const displayHistory = [...historyGroups.values()].map(records => {
-    const validAccuracy = records.filter(item => Number.isFinite(Number(item.accuracy)) && Number(item.accuracy) > 0);
-    const candidates = validAccuracy.length ? validAccuracy : records;
-    const representative = [...candidates].sort((a, b) => {
-      if (validAccuracy.length && Number(a.accuracy) !== Number(b.accuracy)) return Number(a.accuracy) - Number(b.accuracy);
-      const timeDiff = new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime();
-      return timeDiff || String(a.id).localeCompare(String(b.id));
-    })[0];
-    return representative ? { ...representative, rawRecords: records } : null;
-  }).filter(Boolean).sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime());
-  const visibleIds = new Set(displayHistory.map(item => item.id));
+  const displayHistory = groupHistoryRecords(scopedRawHistory, intervalMs);
   const visibleRawIds = new Set(scopedRawHistory.map(item => item.id));
   const pageCount = Math.max(1, Math.ceil(displayHistory.length / historyPageSize));
   const currentHistoryPage = Math.min(historyPage, pageCount);
@@ -607,19 +653,44 @@ function Dashboard() {
     return acc;
   }, {});
   const activeFilterParts = [];
-  if (historyStartDate || historyEndDate) activeFilterParts.push(`${historyStartDate || "…"} – ${historyEndDate || "…"}`);
+  if (historyRangeMode === "relative") activeFilterParts.push(`Terakhir ${relativeMinutes === 30 ? "30 menit" : `${relativeMinutes / 60} jam`}`);
+  else if (historyStartDate || historyEndDate) activeFilterParts.push(`${historyStartDate || "…"} – ${historyEndDate || "…"}`);
   if (historyFilter !== "ALL") activeFilterParts.push(historyFilter === "ANDROID" ? "Android" : "Browser");
-  if (historyInterval !== "1") activeFilterParts.push(historyInterval === "ALL" ? "Semua titik" : `${Number(historyInterval) >= 60 ? `${Number(historyInterval) / 60} jam terakhir` : `${historyInterval} menit`}`);
-  if (historyStartHour !== "ALL" || historyEndHour !== "ALL") activeFilterParts.push(`${historyStartHour === "ALL" ? "00" : String(historyStartHour).padStart(2, "0")}:00–${historyEndHour === "ALL" ? "24" : String(historyEndHour).padStart(2, "0")}:00`);
+  if (historyRangeMode !== "relative" && historyInterval !== "1") activeFilterParts.push(historyInterval === "ALL" || Number(historyInterval) >= 30 ? "Semua titik" : `${historyInterval} menit per grup`);
+  if (historyRangeMode !== "relative" && (historyStartHour !== "ALL" || historyEndHour !== "ALL")) activeFilterParts.push(`${historyStartHour === "ALL" ? "00" : String(historyStartHour).padStart(2, "0")}:00–${historyEndHour === "ALL" ? "24" : String(historyEndHour).padStart(2, "0")}:00`);
   const activeFilterSummary = activeFilterParts.length ? activeFilterParts.join(" · ") : "Semua tanggal dan jam";
   useEffect(() => {
-    if (selectedHistoryId && !visibleIds.has(selectedHistoryId)) {
+    if (!selectedHistoryId) return;
+    const selectedGroup = displayHistory.find(group => group.groupId === selectedHistoryId);
+    if (!selectedGroup || (selectedRawRecordId && !visibleRawIds.has(selectedRawRecordId))) {
       setSelectedHistoryId(null);
+      setSelectedHistoryRecordId(null);
       setSelectedRawRecordId(null);
-    } else if (selectedRawRecordId && !visibleRawIds.has(selectedRawRecordId)) {
-      setSelectedRawRecordId(null);
+      setHistoryPopupOpen(false);
+      historyPopupSelectionKeyRef.current = null;
+      setHistorySelectionNotice(selectedRawRecordId
+        ? "Rekaman mentah yang dipilih sudah dihapus atau berada di luar filter waktu; tidak ada titik pengganti yang dipilih."
+        : "Lokasi yang dipilih sudah dihapus atau berada di luar filter waktu; tidak ada titik pengganti yang dipilih.");
+      return;
     }
-  }, [selectedHistoryId, selectedRawRecordId, locationHistory, historyFilter, historyInterval, historyStartDate, historyEndDate, historyStartHour, historyEndHour, clockNow]);
+
+    if (!selectedRawRecordId) {
+      const selectedRecordStillVisible = selectedGroup.rawRecords.some(record => record.id === selectedHistoryRecordId);
+      if (!selectedRecordStillVisible) {
+        setSelectedHistoryId(null);
+        setSelectedHistoryRecordId(null);
+        setHistoryPopupOpen(false);
+        historyPopupSelectionKeyRef.current = null;
+        setHistorySelectionNotice("Rekaman yang dipilih sudah dihapus atau berada di luar filter waktu; tidak ada titik pengganti yang dipilih.");
+      } else if (selectedGroup.id !== selectedHistoryRecordId) {
+        setSelectedHistoryRecordId(selectedGroup.id);
+        setHistorySelectionNotice("Titik perwakilan grup diperbarui mengikuti rekaman terbaru; pilihan grup tetap sama.");
+      }
+    } else if (selectedGroup.id !== selectedHistoryRecordId) {
+      setSelectedHistoryRecordId(selectedGroup.id);
+      setHistorySelectionNotice("Titik perwakilan grup diperbarui; rekaman mentah yang Anda pilih tetap dipertahankan.");
+    }
+  }, [selectedHistoryId, selectedHistoryRecordId, selectedRawRecordId, locationHistory, historyFilter, historyInterval, historyRangeMode, historyStartDate, historyEndDate, historyStartHour, historyEndHour, historyFilterClock]);
   useEffect(() => {
     if (historyPage > pageCount) setHistoryPage(pageCount);
   }, [historyPage, pageCount]);
@@ -634,7 +705,7 @@ function Dashboard() {
       </header>
 
       <main className="layout">
-        <aside className={`sidebar history-sheet sheet-${historySheetState}`} aria-label="Location History">
+      <aside className={`sidebar history-sheet sheet-${historySheetState}`} aria-label="Location History">
           <button
             type="button"
             className="history-sheet-handle"
@@ -648,7 +719,7 @@ function Dashboard() {
           >
             <span className="history-sheet-grip" />
             <span className="history-sheet-summary">Location History · {displayHistory.length} grup</span>
-            {selectedHistoryId && <span className="history-sheet-selected">Rekaman terpilih: {new Date(displayHistory.find(item => item.id === selectedHistoryId)?.recorded_at || Date.now()).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })}</span>}
+            {selectedHistoryId && <span className="history-sheet-selected">Rekaman terpilih: {new Date(displayHistory.find(item => item.groupId === selectedHistoryId)?.recorded_at || Date.now()).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })}</span>}
           </button>
           <div className="sidebar-content">
           <section className="card">
@@ -668,7 +739,7 @@ function Dashboard() {
               <button
                 className={`member ${selected?.id === m.id ? "active" : ""}`}
                 key={m.id}
-                onClick={() => { setHistoryPage(1); setSelected(m); }}
+                onClick={() => { setHistoryPage(1); setSelectedHistoryId(null); setSelectedHistoryRecordId(null); setSelectedRawRecordId(null); setHistoryPopupOpen(false); historyPopupSelectionKeyRef.current = null; setHistorySelectionNotice(""); setSelected(m); setHistorySheetState("peek"); }}
               >
                 <span className="dot" />
                 <span>
@@ -742,6 +813,7 @@ function Dashboard() {
               <div className="history-block">
                 <h3>Location history</h3>
                 <p className="muted">Garis rute menghubungkan titik berdasarkan waktu, dari titik awal ke titik terbaru.</p>
+                {historySelectionNotice && <p className="history-selection-notice" role="status">{historySelectionNotice}</p>}
                 <button type="button" className="mobile-filter-toggle" aria-expanded={mobileFiltersOpen} onClick={() => setMobileFiltersOpen(open => !open)}>
                   Filter
                 </button>
@@ -750,11 +822,11 @@ function Dashboard() {
                 <div className="history-date-filters">
                   <div>
                     <label htmlFor="history-start-date">Dari tanggal</label>
-                    <input id="history-start-date" type="date" value={historyStartDate} max={historyEndDate || undefined} onChange={event => { setHistoryPage(1); setHistoryStartDate(event.target.value); }} />
+                    <input id="history-start-date" type="date" value={historyStartDate} max={historyEndDate || undefined} disabled={historyRangeMode === "relative"} onChange={event => { setHistoryPage(1); setHistoryRangeMode("absolute"); setHistoryStartDate(event.target.value); }} />
                   </div>
                   <div>
                     <label htmlFor="history-end-date">Sampai tanggal</label>
-                    <input id="history-end-date" type="date" value={historyEndDate} min={historyStartDate || undefined} onChange={event => { setHistoryPage(1); setHistoryEndDate(event.target.value); }} />
+                    <input id="history-end-date" type="date" value={historyEndDate} min={historyStartDate || undefined} disabled={historyRangeMode === "relative"} onChange={event => { setHistoryPage(1); setHistoryRangeMode("absolute"); setHistoryEndDate(event.target.value); }} />
                   </div>
                 </div>
                 <button
@@ -763,13 +835,15 @@ function Dashboard() {
                   onClick={() => {
                     setHistoryStartDate(todayDate);
                     setHistoryEndDate(todayDate);
+                    setHistoryRangeMode("absolute");
+                    setHistorySelectionNotice("");
                     setHistoryFilter("ALL");
                     setHistoryInterval("1");
                     setHistoryStartHour("ALL");
                     setHistoryEndHour("ALL");
                     setHistoryPage(1);
                   }}
-                  disabled={historyStartDate === todayDate && historyEndDate === todayDate && historyFilter === "ALL" && historyInterval === "1" && historyStartHour === "ALL" && historyEndHour === "ALL"}
+                  disabled={historyRangeMode === "absolute" && historyStartDate === todayDate && historyEndDate === todayDate && historyFilter === "ALL" && historyInterval === "1" && historyStartHour === "ALL" && historyEndHour === "ALL"}
                 >
                   Reset filter
                 </button>
@@ -779,8 +853,13 @@ function Dashboard() {
                   <option value="ANDROID">Android</option>
                   <option value="BROWSER">Browser</option>
                 </select>
-                <label htmlFor="history-interval-filter">Interval tampilan</label>
-                <select id="history-interval-filter" value={historyInterval} onChange={event => { setHistoryPage(1); setHistoryInterval(event.target.value); }}>
+                <label htmlFor="history-interval-filter">Rentang waktu / interval tampilan</label>
+                <select id="history-interval-filter" value={historyInterval} onChange={event => {
+                  const value = event.target.value;
+                  setHistoryPage(1);
+                  setHistoryInterval(value);
+                  setHistoryRangeMode(value !== "ALL" && Number(value) >= 30 ? "relative" : "absolute");
+                }}>
                   <option value="ALL">Semua titik</option>
                   <option value="1">1 menit</option>
                   <option value="5">5 menit</option>
@@ -792,24 +871,27 @@ function Dashboard() {
                   <option value="240">4 jam terakhir</option>
                   <option value="300">5 jam terakhir</option>
                 </select>
-                {Number(historyInterval) >= 30 && <p className="muted history-filter-hint">{historyIsTodayRange || !historyHasDateRange ? `Menampilkan titik mentah dari ${Number(historyInterval) === 30 ? "30 menit" : `${Number(historyInterval) / 60} jam`} terakhir, selama hari ini.` : "Filter tanggal aktif: menampilkan titik mentah pada tanggal terpilih."}</p>}
+                {historyRangeMode === "relative" ? <div className="history-filter-hint">
+                  <p className="muted">Rentang bergerak: rekaman dari {relativeMinutes === 30 ? "30 menit" : `${relativeMinutes / 60} jam`} terakhir sampai sekarang. Filter tanggal dan jam dinonaktifkan selama mode ini.</p>
+                  <button type="button" className="history-range-mode-button" onClick={() => setHistoryRangeMode("absolute")}>Gunakan tanggal dan jam</button>
+                </div> : Number(historyInterval) >= 30 && <p className="muted history-filter-hint">Tanggal/jam absolut aktif; semua titik mentah pada rentang yang dipilih ditampilkan.</p>}
                 <div className="history-hour-filters">
                   <div>
                     <label htmlFor="history-start-hour">Dari jam</label>
-                    <select id="history-start-hour" value={historyStartHour} onChange={event => { setHistoryPage(1); setHistoryStartHour(event.target.value); }}>
+                    <select id="history-start-hour" value={historyStartHour} disabled={historyRangeMode === "relative"} onChange={event => { setHistoryPage(1); setHistoryRangeMode("absolute"); setHistoryStartHour(event.target.value); }}>
                       <option value="ALL">Semua jam</option>
                       {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={String(hour)}>{String(hour).padStart(2, "0")}:00</option>)}
                     </select>
                   </div>
                   <div>
                     <label htmlFor="history-end-hour">Sampai jam</label>
-                    <select id="history-end-hour" value={historyEndHour} onChange={event => { setHistoryPage(1); setHistoryEndHour(event.target.value); }}>
+                    <select id="history-end-hour" value={historyEndHour} disabled={historyRangeMode === "relative"} onChange={event => { setHistoryPage(1); setHistoryRangeMode("absolute"); setHistoryEndHour(event.target.value); }}>
                       <option value="ALL">Semua jam</option>
                       {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={String(hour)}>{String(hour).padStart(2, "0")}:00 (batas akhir)</option>)}
                     </select>
                   </div>
                 </div>
-                {(historyStartHour !== "ALL" || historyEndHour !== "ALL") && <p className="muted history-filter-hint">
+                {historyRangeMode !== "relative" && (historyStartHour !== "ALL" || historyEndHour !== "ALL") && <p className="muted history-filter-hint">
                   Jam memakai waktu Asia/Jakarta. Batas mulai termasuk, batas akhir tidak termasuk (22:00–23:00 berarti hanya jam 22). Jika melewati tengah malam, misalnya 22:00–02:00, bagian setelah tengah malam dihitung pada hari berikutnya.
                 </p>}
                 <button type="button" className="history-apply-button" onClick={() => { setMobileFiltersOpen(false); setHistorySheetState("expanded"); }}>Terapkan filter</button>
@@ -840,10 +922,14 @@ function Dashboard() {
 
                     <ul className="history-list">
                       {items.map(item => (
-                        <li key={item.id} ref={node => node ? historyCardRefs.current.set(item.id, node) : historyCardRefs.current.delete(item.id)} className={`history-entry ${selectedHistoryId === item.id ? "selected" : ""}`}>
+                          <li key={item.groupId} ref={node => node ? historyCardRefs.current.set(item.groupId, node) : historyCardRefs.current.delete(item.groupId)} className={`history-entry ${selectedHistoryId === item.groupId ? "selected" : ""}`}>
                           <button type="button" className="history-card-button" disabled={!hasValidCoordinates(item)} onClick={() => {
-                            setSelectedHistoryId(item.id);
+                            historyPopupSelectionKeyRef.current = `${item.groupId}|${item.id}`;
+                            setSelectedHistoryId(item.groupId);
+                            setSelectedHistoryRecordId(item.id);
                             setSelectedRawRecordId(null);
+                            setHistorySelectionNotice("");
+                            setHistoryPopupOpen(true);
                             setHistorySheetState(state => state === "expanded" ? "expanded" : "peek");
                             historyMarkerByIdRef.current.get(item.id)?.openPopup();
                             if (hasValidCoordinates(item) && mapInstance.current) mapInstance.current.flyTo([Number(item.latitude), Number(item.longitude)], Math.min(17, Math.max(16, mapInstance.current.getZoom())), { duration: 0.5 });
@@ -854,22 +940,26 @@ function Dashboard() {
                             <small>{item.rawRecords.length} rekaman dalam grup{item.rawRecords.length > 1 && " - titik terbaik ditampilkan"}</small>
                           </button>
                           {item.rawRecords.length > 1 && <>
-                            <button type="button" className="history-expand-button" aria-expanded={expandedHistoryGroups.has(item.id)} onClick={() => setExpandedHistoryGroups(previous => {
+                            <button type="button" className="history-expand-button" aria-expanded={expandedHistoryGroups.has(item.groupId)} onClick={() => setExpandedHistoryGroups(previous => {
                               const next = new Set(previous);
-                              if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                              if (next.has(item.groupId)) next.delete(item.groupId); else next.add(item.groupId);
                               return next;
-                            })}>{expandedHistoryGroups.has(item.id) ? "Sembunyikan titik mentah" : "Lihat titik mentah"}</button>
-                            {expandedHistoryGroups.has(item.id) && <div className="history-raw-records">
+                            })}>{expandedHistoryGroups.has(item.groupId) ? "Sembunyikan titik mentah" : "Lihat titik mentah"}</button>
+                            {expandedHistoryGroups.has(item.groupId) && <div className="history-raw-records">
                               {item.rawRecords.map(raw => <div key={raw.id} className="history-raw-record">
                                 <strong>{new Date(raw.recorded_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", second: "2-digit" })}</strong>
                                 <span>{hasValidCoordinates(raw) ? `${Number(raw.latitude).toFixed(6)}, ${Number(raw.longitude).toFixed(6)}` : "Koordinat tidak valid"}</span>
                                 <small>{locationSourceLabel(raw)}{Number.isFinite(Number(raw.accuracy)) && Number(raw.accuracy) > 0 ? `; akurasi: ${Math.round(Number(raw.accuracy))} m` : " - akurasi tidak tersedia"}</small>
                                 <button type="button" className="history-raw-map-button" disabled={!hasValidCoordinates(raw)} onClick={() => {
+                                  historyPopupSelectionKeyRef.current = `${item.groupId}|${raw.id}`;
                                   setMapMode("raw");
-                                  setSelectedHistoryId(item.id);
+                                  setSelectedHistoryId(item.groupId);
+                                  setSelectedHistoryRecordId(item.id);
                                   setSelectedRawRecordId(raw.id);
+                                  setHistorySelectionNotice("");
+                                  setHistoryPopupOpen(true);
                                   setHistorySheetState(state => state === "expanded" ? "expanded" : "peek");
-                                  const displayIndex = displayHistory.findIndex(group => group.id === item.id);
+                                  const displayIndex = displayHistory.findIndex(group => group.groupId === item.groupId);
                                   if (displayIndex >= 0) setHistoryPage(Math.floor(displayIndex / historyPageSize) + 1);
                                 }}>Lihat rekaman ini di peta</button>
                               </div>)}

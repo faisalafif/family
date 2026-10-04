@@ -65,6 +65,8 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .history-hour-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .history-hour-filters select { font-size: 12px; }
 .history-filter-hint { margin: -4px 0 10px; }
+.history-selection-notice { padding: 9px 10px; border-radius: 8px; background: #eff6ff; color: #1e40af; font-size: 12px; line-height: 1.45; }
+.history-range-mode-button { min-height: 38px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #1d4ed8; }
 .history-date-filters input { padding: 9px 8px; font-size: 12px; }
 .history-reset-button { width: 100%; padding: 8px 10px; margin: 0 0 10px; border: 1px solid #d0d5dd; border-radius: 8px; background: white; color: #475467; font-size: 12px; }
 .history-reset-button:disabled { opacity: .5; cursor: default; }
