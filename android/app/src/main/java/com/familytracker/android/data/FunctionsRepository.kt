@@ -42,6 +42,12 @@ class FunctionsRepository {
             .put("trackingToken", token).put("memberId", memberId).put("deviceId", deviceId))
     }
 
+    suspend fun confirmProtectionPause(token: String, memberId: String, deviceId: String, diagnostics: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        call("android-protection-control", JSONObject()
+            .put("trackingToken", token).put("memberId", memberId).put("deviceId", deviceId)
+            .put("diagnostics", diagnostics))
+    }
+
     suspend fun upload(location: PendingLocation, trackingToken: String, diagnostics: JSONObject): JSONObject = withContext(Dispatchers.IO) {
         call("android-location-ingest", JSONObject()
             .put("trackingToken", trackingToken).put("memberId", location.memberId).put("deviceId", location.deviceId).put("eventId", location.eventId)

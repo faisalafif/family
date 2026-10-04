@@ -36,10 +36,12 @@ create table if not exists public.android_device_status (
   network_online boolean not null,
   battery_optimization_exempt boolean not null,
   battery_percent integer check (battery_percent between 0 and 100),
+  protection_enabled boolean not null default true,
   queued_uploads integer not null default 0 check (queued_uploads between 0 and 500),
   reported_at timestamptz not null default now()
 );
 alter table public.android_device_status add column if not exists battery_percent integer;
+alter table public.android_device_status add column if not exists protection_enabled boolean not null default true;
 do $$ begin
   alter table public.android_device_status add constraint android_device_status_battery_percent_check
     check (battery_percent between 0 and 100);

@@ -209,7 +209,7 @@ function Dashboard() {
     }
     const { data, error } = await supabase
       .from("android_device_status")
-      .select("device_id,location_permission,background_permission,foreground_service,location_services,network_online,battery_optimization_exempt,battery_percent,queued_uploads,reported_at")
+      .select("device_id,location_permission,background_permission,foreground_service,location_services,network_online,battery_optimization_exempt,battery_percent,protection_enabled,queued_uploads,reported_at")
       .eq("member_id", memberId)
       .order("reported_at", { ascending: false })
       .limit(1)
@@ -788,6 +788,7 @@ function Dashboard() {
                 <h3>Diagnostik Android</h3>
                 {deviceDiagnosticsError ? <p className="muted">Gagal memuat diagnostik: {deviceDiagnosticsError}. Jalankan ulang supabase/android-location.sql di Supabase SQL Editor.</p> : !deviceDiagnostics ? <p className="muted">Belum ada laporan diagnostik. Pasang APK Android terbaru, deploy ulang android-location-ingest, lalu tunggu Android mengirim lokasi berikutnya.</p> : <>
                   <p className="muted">Laporan: {new Date(deviceDiagnostics.reported_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}{Date.now() - new Date(deviceDiagnostics.reported_at).getTime() > offlineThresholdMs ? " · data mungkin sudah lama" : ""}</p>
+                  <p><b>Perlindungan lokasi:</b> {deviceDiagnostics.protection_enabled ? "Aktif" : "Dijeda dari perangkat"}</p>
                   <p><b>Izin lokasi:</b> {deviceDiagnostics.location_permission ? "Diizinkan" : "Belum diizinkan"}</p>
                   <p><b>Izin latar belakang:</b> {deviceDiagnostics.background_permission ? "Diizinkan" : "Belum diizinkan"}</p>
                   <p><b>Foreground service:</b> {deviceDiagnostics.foreground_service ? "Aktif · layanan lokasi berjalan di latar dengan notifikasi persisten" : "Tidak aktif · lokasi latar tidak sedang dipantau"}</p>

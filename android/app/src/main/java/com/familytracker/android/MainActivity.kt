@@ -54,6 +54,7 @@ import com.familytracker.android.data.DevicePreferences
 import com.familytracker.android.data.FunctionsRepository
 import com.familytracker.android.data.LocalDatabase
 import com.familytracker.android.service.LocationForegroundService
+import com.familytracker.android.worker.ProtectionStatusSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -148,7 +149,7 @@ private fun FamilyTrackerApp() {
     DisposableEffect(prefs) {
         val mainHandler = Handler(Looper.getMainLooper())
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key in setOf("protection_enabled", "last_update", "last_accuracy", "last_status", "admin_message", "admin_message_sync_error")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context) }
+            if (key in setOf("protection_enabled", "protection_pause_sync_pending", "last_update", "last_accuracy", "last_status", "admin_message", "admin_message_sync_error")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context) }
         }
         prefs.addListener(listener)
         onDispose { prefs.removeListener(listener) }
@@ -187,6 +188,8 @@ private fun FamilyTrackerApp() {
                 Build.VERSION.SDK_INT >= 33 && !hasNotification -> requestNotificationPermission()
                 else -> {
                     autoStartAfterLink = false
+                    ProtectionStatusSync.cancel(context)
+                    prefs.protectionPauseSyncPending = false
                     ContextCompat.startForegroundService(context, Intent(context, LocationForegroundService::class.java).setAction(LocationForegroundService.ACTION_START))
                     prefs.protectionEnabled = true; prefs.lastStatus = "Mengaktifkan perlindungan lokasi…"; screenRefresh++
                 }
@@ -248,12 +251,19 @@ private fun FamilyTrackerApp() {
                         SummaryLine("Akurasi", if (prefs.lastAccuracy > 0) "±${prefs.lastAccuracy.toInt()} m" else "—")
                         SummaryLine("Baterai", batteryLevel(context)?.let { "$it%" } ?: "Tidak diketahui")
                         SummaryLine("Jaringan", if (isOnline(context)) "Online" else "Offline · antrean lokal $queued")
+                        if (prefs.protectionPauseSyncPending) Text("Perlindungan sudah dijeda di perangkat. Status jeda akan dikirim ke web saat jaringan tersedia.", color = Color(0xFF68778C), modifier = Modifier.padding(top = 10.dp))
                         if (!isOnline(context) && queued > 0) Text("Lokasi disimpan di perangkat dan akan dicoba kirim lagi saat jaringan kembali.", color = Color(0xFF68778C), modifier = Modifier.padding(top = 10.dp))
                         Spacer(Modifier.height(14.dp))
                         Button(onClick = { if (serviceRunning) {
+                            prefs.protectionEnabled = false
+                            prefs.protectionPauseSyncPending = true
+                            prefs.lastStatus = "Perlindungan dijeda · status web menunggu sinkronisasi"
                             context.startService(Intent(context, LocationForegroundService::class.java).setAction(LocationForegroundService.ACTION_STOP))
-                            prefs.protectionEnabled = false; prefs.lastStatus = "Perlindungan lokasi dijeda"; screenRefresh++
-                        } else startProtection() }, modifier = Modifier.fillMaxWidth()) {
+                            ProtectionStatusSync.enqueue(context)
+                            serviceRunning = false
+                            message = "Perlindungan langsung dijeda di HP. Statusnya akan disinkronkan ke web saat internet tersedia."
+                            screenRefresh++
+                        } else startProtection() }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                             Text(if (serviceRunning) "Jeda perlindungan" else "Aktifkan perlindungan lokasi")
                         }
                         if (Build.VERSION.SDK_INT >= 29 && !hasBackground) {

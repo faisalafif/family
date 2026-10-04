@@ -125,14 +125,12 @@ class LocationForegroundService : Service() {
 
     private fun notification(text: String): Notification {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val pause = PendingIntent.getService(this, 1, Intent(this, LocationForegroundService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentTitle("note")
             .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(0, "Pause", pause)
             .build()
     }
 

@@ -25,6 +25,9 @@ class DevicePreferences(context: Context) {
     var protectionEnabled: Boolean
         get() = prefs.getBoolean("protection_enabled", false)
         set(value) { prefs.edit().putBoolean("protection_enabled", value).apply() }
+    var protectionPauseSyncPending: Boolean
+        get() = prefs.getBoolean("protection_pause_sync_pending", false)
+        set(value) { prefs.edit().putBoolean("protection_pause_sync_pending", value).apply() }
     var locationPermissionAsked: Boolean
         get() = prefs.getBoolean("location_permission_asked", false)
         set(value) { prefs.edit().putBoolean("location_permission_asked", value).apply() }

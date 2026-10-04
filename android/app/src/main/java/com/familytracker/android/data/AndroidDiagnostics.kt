@@ -40,6 +40,7 @@ object AndroidDiagnostics {
             .put("location_permission", fineLocation || coarseLocation)
             .put("background_permission", Build.VERSION.SDK_INT < 29 || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED)
             .put("foreground_service", serviceRunning)
+            .put("protection_enabled", DevicePreferences(context).protectionEnabled)
             .put("location_services", locationEnabled)
             .put("network_online", online)
             .put("battery_optimization_exempt", ignoresBatteryOptimization)
