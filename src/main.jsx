@@ -3,9 +3,6 @@ import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import markerIconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
-import markerIconUrl from "leaflet/dist/images/marker-icon.png";
-import markerShadowUrl from "leaflet/dist/images/marker-shadow.png";
 import "./style.css";
 import { createLocationProvider, getProviderStatus, LocationProviderError } from "./location/providers.js";
 import { persistLocationResult } from "./location/persistence.js";
@@ -13,12 +10,14 @@ import { isInJakartaDateTimeRange, jakartaDateInputValue, jakartaMidnightUtc, ne
 import { buildRouteSegments } from "./location/map-route.js";
 import { groupHistoryRecords, isWithinRelativeWindow } from "./location/history-groups.js";
 
-// Resolve Leaflet's marker images through Vite so production builds don't
-// request the package-relative paths that can render as a broken "Marker" image.
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIconRetinaUrl,
-  iconUrl: markerIconUrl,
-  shadowUrl: markerShadowUrl
+// Use a self-contained SVG so the selected member marker doesn't depend on
+// Leaflet image URLs that can break on production base paths/CDNs.
+const selectedLocationIcon = L.divIcon({
+  className: "selected-location-marker",
+  html: '<svg viewBox="0 0 36 46" width="36" height="46" aria-hidden="true"><path d="M18 1C8.6 1 1 8.6 1 18c0 12.2 17 27 17 27s17-14.8 17-27C35 8.6 27.4 1 18 1Z" fill="#2f80ed" stroke="#fff" stroke-width="2"/><circle cx="18" cy="18" r="6.5" fill="#fff"/></svg>',
+  iconSize: [36, 46],
+  iconAnchor: [18, 46],
+  popupAnchor: [0, -42]
 });
 
 const locationProviderName = import.meta.env.VITE_LOCATION_PROVIDER || "unavailable";
@@ -437,7 +436,9 @@ function Dashboard() {
     if (markerRef.current) {
       markerRef.current.setLatLng(latLng).setPopupContent(popup);
     } else {
-      markerRef.current = L.marker(latLng).addTo(mapInstance.current).bindPopup(popup, { autoPan: false });
+      markerRef.current = L.marker(latLng, { icon: selectedLocationIcon })
+        .addTo(mapInstance.current)
+        .bindPopup(popup, { autoPan: false });
     }
   }, [selected, clockNow]);
 
