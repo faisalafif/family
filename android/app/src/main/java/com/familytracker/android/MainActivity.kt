@@ -53,7 +53,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.familytracker.android.data.DevicePreferences
 import com.familytracker.android.data.FunctionsRepository
 import com.familytracker.android.data.LocalDatabase
+import com.familytracker.android.data.AppUsageCollector
 import com.familytracker.android.service.LocationForegroundService
+import com.familytracker.android.worker.AppUsageSync
 import com.familytracker.android.worker.ProtectionStatusSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -93,6 +95,8 @@ private fun FamilyTrackerApp() {
     var hasNotification by remember { mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) }
     var queued by remember { mutableIntStateOf(0) }
     var serviceRunning by remember { mutableStateOf(isLocationServiceRunning(context)) }
+    var appUsageEnabled by remember { mutableStateOf(prefs.appUsageEnabled) }
+    var hasUsageAccess by remember { mutableStateOf(AppUsageCollector.hasUsageAccess(context)) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) {
@@ -100,6 +104,9 @@ private fun FamilyTrackerApp() {
             locationEnabled = isLocationEnabled(context)
             hasNotification = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             serviceRunning = isLocationServiceRunning(context)
+            appUsageEnabled = prefs.appUsageEnabled
+            hasUsageAccess = AppUsageCollector.hasUsageAccess(context)
+            if (prefs.memberId != null) AppUsageSync.schedule(context)
             screenRefresh++
         } }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -107,6 +114,7 @@ private fun FamilyTrackerApp() {
     }
 
     LaunchedEffect(screenRefresh) { queued = withContext(Dispatchers.IO) { LocalDatabase.get(context).locationDao().count() } }
+    LaunchedEffect(prefs.memberId) { if (prefs.memberId != null) AppUsageSync.schedule(context) }
 
     val foregroundPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         hasFine = result[Manifest.permission.ACCESS_FINE_LOCATION] == true || result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
@@ -255,6 +263,7 @@ private fun FamilyTrackerApp() {
                         if (!isOnline(context) && queued > 0) Text("Lokasi disimpan di perangkat dan akan dicoba kirim lagi saat jaringan kembali.", color = Color(0xFF68778C), modifier = Modifier.padding(top = 10.dp))
                         Spacer(Modifier.height(14.dp))
                         Button(onClick = { if (serviceRunning) {
+                            prefs.protectionPausedAtMillis = System.currentTimeMillis()
                             prefs.protectionEnabled = false
                             prefs.protectionPauseSyncPending = true
                             prefs.lastStatus = "Perlindungan dijeda · status web menunggu sinkronisasi"
@@ -276,6 +285,36 @@ private fun FamilyTrackerApp() {
                             OutlinedButton(onClick = requestNotificationPermission, modifier = Modifier.fillMaxWidth()) { Text("Izinkan notifikasi layanan") }
                         }
                         TextButton(onClick = { showDiagnostics = true }) { Text("Diagnostik perangkat") }
+                    }
+                }
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                ) {
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Riwayat penggunaan aplikasi", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
+                        Text("Opsional. Jika diaktifkan, note mengirim nama aplikasi dan total durasi aplikasi tampil di depan ke dashboard. Pesan, notifikasi, isi layar, dan ketikan tidak dikumpulkan. Data GPS tetap berjalan terpisah.", color = Color(0xFF68778C), style = MaterialTheme.typography.bodySmall)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (appUsageEnabled) "Pencatatan aktif" else "Pencatatan nonaktif", color = Ink, fontWeight = FontWeight.SemiBold)
+                            Switch(checked = appUsageEnabled, onCheckedChange = { enabled ->
+                                prefs.appUsageEnabled = enabled
+                                appUsageEnabled = enabled
+                                AppUsageSync.requestNow(context)
+                                if (enabled && !hasUsageAccess) {
+                                    message = "Izinkan Usage Access secara manual di pengaturan Android untuk mulai mengumpulkan ringkasan penggunaan aplikasi."
+                                    context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                                }
+                            })
+                        }
+                        if (appUsageEnabled && !hasUsageAccess) {
+                            Text("Usage Access belum diizinkan. Pengumpulan belum dimulai.", color = Color(0xFFB54708), style = MaterialTheme.typography.bodySmall)
+                            OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }, modifier = Modifier.fillMaxWidth()) {
+                                Text("Buka pengaturan Usage Access")
+                            }
+                        } else if (appUsageEnabled) {
+                            Text("Usage Access diizinkan. Ringkasan diperbarui berkala dan tersimpan sementara saat offline.", color = Color(0xFF16834A), style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }

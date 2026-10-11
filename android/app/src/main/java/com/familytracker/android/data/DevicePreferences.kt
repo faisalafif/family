@@ -28,6 +28,12 @@ class DevicePreferences(context: Context) {
     var protectionPauseSyncPending: Boolean
         get() = prefs.getBoolean("protection_pause_sync_pending", false)
         set(value) { prefs.edit().putBoolean("protection_pause_sync_pending", value).apply() }
+    var protectionPausedAtMillis: Long
+        get() = prefs.getLong("protection_paused_at_millis", 0L)
+        set(value) { prefs.edit().putLong("protection_paused_at_millis", value).apply() }
+    var appUsageEnabled: Boolean
+        get() = prefs.getBoolean("app_usage_enabled", false)
+        set(value) { prefs.edit().putBoolean("app_usage_enabled", value).apply() }
     var locationPermissionAsked: Boolean
         get() = prefs.getBoolean("location_permission_asked", false)
         set(value) { prefs.edit().putBoolean("location_permission_asked", value).apply() }

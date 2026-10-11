@@ -13,6 +13,7 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
   if (![trackingToken, memberId, deviceId].every(isUuid) || !diagnostics || typeof diagnostics !== "object" ||
       !["location_permission", "background_permission", "location_services", "network_online", "battery_optimization_exempt"].every(key => typeof diagnostics[key] === "boolean") ||
       !Number.isInteger(Number(diagnostics.queued_uploads)) || Number(diagnostics.queued_uploads) < 0 || Number(diagnostics.queued_uploads) > 500 ||
+      (diagnostics.protection_paused_at != null && (!Number.isFinite(Date.parse(String(diagnostics.protection_paused_at))) || Date.parse(String(diagnostics.protection_paused_at)) > Date.now() + 300_000)) ||
       (diagnostics.battery_percent != null && (!Number.isInteger(Number(diagnostics.battery_percent)) || Number(diagnostics.battery_percent) < 0 || Number(diagnostics.battery_percent) > 100))) {
     return json({ message: "Permintaan jeda tidak valid." }, 400);
   }
@@ -35,6 +36,7 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
     network_online: diagnostics.network_online,
     battery_optimization_exempt: diagnostics.battery_optimization_exempt,
     battery_percent: diagnostics.battery_percent == null ? null : Number(diagnostics.battery_percent),
+    protection_paused_at: diagnostics.protection_paused_at == null ? null : new Date(String(diagnostics.protection_paused_at)).toISOString(),
     protection_enabled: false,
     queued_uploads: Number(diagnostics.queued_uploads),
     reported_at: new Date().toISOString(),

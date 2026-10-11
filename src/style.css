@@ -101,6 +101,25 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .device-diagnostics h3 { margin: 0 0 8px; font-size: 14px; }
 .device-diagnostics p { margin: 6px 0; font-size: 13px; }
 .device-diagnostics .muted { font-size: 11px; }
+.app-usage-section, .web-safety-section { margin: 14px 0; padding: 14px; border-radius: 10px; background: #f8fafc; }
+.app-usage-key-entry { display: grid; gap: 8px; }
+.app-usage-key-entry .secondary { margin: 0; }
+.app-usage-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.app-usage-heading h3, .web-safety-section h3 { margin: 0 0 5px; font-size: 15px; }
+.app-usage-heading .muted, .web-safety-section .muted { margin: 0 0 8px; font-size: 12px; }
+.app-usage-date-label { flex: 0 0 140px; }
+.app-usage-date-label input { min-height: 38px; padding: 7px; font-size: 12px; }
+.app-usage-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.app-usage-row { display: flex; align-items: center; width: 100%; gap: 10px; padding: 9px; border-radius: 9px; background: white; color: #18202a; text-align: left; }
+.app-usage-row:hover, .app-usage-row[aria-expanded="true"] { background: #eff6ff; }
+.app-usage-icon { display: grid; place-items: center; flex: 0 0 38px; height: 38px; border-radius: 10px; background: #e8eef9; color: #2563eb; font-weight: 700; }
+.app-usage-name { display: grid; flex: 1 1 auto; min-width: 0; gap: 2px; }
+.app-usage-name strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.app-usage-name small { overflow: hidden; color: #667085; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.app-usage-total { flex: 0 0 auto; font-size: 12px; font-weight: 650; }
+.app-usage-details { padding: 8px 10px 2px 58px; color: #475467; font-size: 12px; line-height: 1.45; }
+.app-usage-details p { margin: 0 0 7px; }
+.web-safety-section { border: 1px solid #e7ebf0; background: #fff; }
 .admin-message-compose { margin: 14px 0; padding: 12px; border-radius: 10px; background: #f8fafc; }
 .admin-message-compose h3 { margin: 0 0 8px; font-size: 14px; }
 .admin-message-compose .secondary { margin-top: 8px; }
@@ -145,6 +164,9 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
   .history-card-button { min-height: 64px; gap: 7px 10px; padding: 12px; }
   .history-expand-button { min-height: 38px; margin-left: 12px; font-size: 12px; }
   .history-raw-map-button { min-height: 36px; font-size: 12px; }
+  .app-usage-heading { display: grid; grid-template-columns: 1fr; }
+  .app-usage-date-label { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; flex-basis: auto; }
+  .app-usage-date-label input { min-height: 42px; font-size: 14px; }
   .map-action-controls { position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); left: 58px; z-index: 600; display: flex; flex-wrap: wrap; gap: 5px; width: min(150px, calc(100vw - 230px)); padding: 0; border: 0; background: transparent; box-shadow: none; }
   .map-action-controls button { flex: 1 1 44px; min-height: 40px; padding: 7px 8px; border: 1px solid #d0d5dd; border-radius: 10px; background: rgba(255,255,255,.96); color: #18202a; box-shadow: 0 2px 8px rgba(0,0,0,.14); font-size: 11px; font-weight: 650; }
   .map-action-controls button:disabled { opacity: .55; }

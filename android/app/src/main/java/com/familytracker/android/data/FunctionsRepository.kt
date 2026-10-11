@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import org.json.JSONArray
 import java.util.concurrent.TimeUnit
 
 class FunctionsRepository {
@@ -55,5 +56,36 @@ class FunctionsRepository {
             .put("altitude", location.altitude ?: JSONObject.NULL).put("speed", location.speed?.toDouble() ?: JSONObject.NULL)
             .put("bearing", location.bearing?.toDouble() ?: JSONObject.NULL).put("timestamp", location.timestamp)
             .put("diagnostics", diagnostics))
+    }
+
+    suspend fun syncAppUsage(
+        trackingToken: String,
+        memberId: String,
+        deviceId: String,
+        collectionEnabled: Boolean,
+        usageAccessGranted: Boolean,
+        collectionIncomplete: Boolean,
+        collectedAt: String,
+        records: List<AppUsageRecord>
+    ): JSONObject = withContext(Dispatchers.IO) {
+        val payloadRecords = JSONArray()
+        records.forEach { record ->
+            payloadRecords.put(JSONObject()
+                .put("eventId", record.eventId)
+                .put("usageDate", record.usageDate)
+                .put("packageName", record.packageName)
+                .put("appName", record.appName)
+                .put("usageMs", record.usageMs)
+                .put("lastUsedAt", record.lastUsedAt ?: JSONObject.NULL))
+        }
+        call("android-app-usage-ingest", JSONObject()
+            .put("trackingToken", trackingToken)
+            .put("memberId", memberId)
+            .put("deviceId", deviceId)
+            .put("collectionEnabled", collectionEnabled)
+            .put("usageAccessGranted", usageAccessGranted)
+            .put("collectionIncomplete", collectionIncomplete)
+            .put("collectedAt", collectedAt)
+            .put("records", payloadRecords))
     }
 }

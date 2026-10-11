@@ -20,6 +20,7 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
       !["location_permission", "background_permission", "foreground_service", "location_services", "network_online", "battery_optimization_exempt"].every((key) => typeof diagnostics[key] === "boolean") ||
       (diagnostics.protection_enabled != null && typeof diagnostics.protection_enabled !== "boolean") ||
       !Number.isInteger(Number(diagnostics.queued_uploads)) || Number(diagnostics.queued_uploads) < 0 || Number(diagnostics.queued_uploads) > 500 ||
+      (diagnostics.protection_paused_at != null && (!Number.isFinite(Date.parse(String(diagnostics.protection_paused_at))) || Date.parse(String(diagnostics.protection_paused_at)) > Date.now() + 300_000)) ||
       (diagnostics.battery_percent != null && (!Number.isInteger(Number(diagnostics.battery_percent)) || Number(diagnostics.battery_percent) < 0 || Number(diagnostics.battery_percent) > 100)))) {
     return json({ message: "Data diagnostik perangkat tidak valid." }, 400);
   }
@@ -61,6 +62,7 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
       network_online: diagnostics.network_online,
       battery_optimization_exempt: diagnostics.battery_optimization_exempt,
       battery_percent: diagnostics.battery_percent == null ? null : Number(diagnostics.battery_percent),
+      protection_paused_at: diagnostics.protection_paused_at == null ? null : new Date(String(diagnostics.protection_paused_at)).toISOString(),
       protection_enabled: diagnostics.protection_enabled ?? diagnostics.foreground_service,
       queued_uploads: Number(diagnostics.queued_uploads),
       reported_at: new Date().toISOString(),

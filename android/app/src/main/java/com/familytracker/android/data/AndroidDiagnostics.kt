@@ -13,6 +13,10 @@ import android.os.Build
 import android.os.PowerManager
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 object AndroidDiagnostics {
     fun snapshot(context: Context, queued: Int): JSONObject {
@@ -35,6 +39,10 @@ object AndroidDiagnostics {
         val batteryLevel = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val batteryScale = batteryIntent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
         val batteryPercent = if (batteryLevel >= 0 && batteryScale > 0) batteryLevel * 100 / batteryScale else null
+        val pausedAtMillis = DevicePreferences(context).protectionPausedAtMillis
+        val pausedAt = if (pausedAtMillis > 0) SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }.format(Date(pausedAtMillis)) else null
 
         return JSONObject()
             .put("location_permission", fineLocation || coarseLocation)
@@ -45,6 +53,7 @@ object AndroidDiagnostics {
             .put("network_online", online)
             .put("battery_optimization_exempt", ignoresBatteryOptimization)
             .put("battery_percent", batteryPercent ?: JSONObject.NULL)
+            .put("protection_paused_at", pausedAt ?: JSONObject.NULL)
             .put("queued_uploads", queued.coerceIn(0, 500))
     }
 }

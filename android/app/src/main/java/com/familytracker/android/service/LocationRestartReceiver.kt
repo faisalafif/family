@@ -12,9 +12,11 @@ import com.familytracker.android.data.DevicePreferences
 
 class LocationRestartReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != ACTION_RESTART_LOCATION) return
+        val notificationDismissed = intent?.action == ACTION_NOTIFICATION_DISMISSED
+        if (!notificationDismissed && intent?.action != ACTION_RESTART_LOCATION) return
         val preferences = DevicePreferences(context)
-        if (!preferences.protectionEnabled || preferences.memberId == null || isLocationServiceRunning(context)) return
+        if (!preferences.protectionEnabled || preferences.memberId == null) return
+        if (!notificationDismissed && isLocationServiceRunning(context)) return
         ContextCompat.startForegroundService(
             context,
             Intent(context, LocationForegroundService::class.java).setAction(LocationForegroundService.ACTION_START)
@@ -29,6 +31,7 @@ class LocationRestartReceiver : BroadcastReceiver() {
 
     companion object {
         private const val ACTION_RESTART_LOCATION = "com.familytracker.android.RESTART_LOCATION_AFTER_TASK_REMOVED"
+        const val ACTION_NOTIFICATION_DISMISSED = "com.familytracker.android.LOCATION_NOTIFICATION_DISMISSED"
 
         fun schedule(context: Context) {
             val intent = Intent(context, LocationRestartReceiver::class.java).setAction(ACTION_RESTART_LOCATION)

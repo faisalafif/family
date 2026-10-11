@@ -37,11 +37,13 @@ create table if not exists public.android_device_status (
   battery_optimization_exempt boolean not null,
   battery_percent integer check (battery_percent between 0 and 100),
   protection_enabled boolean not null default true,
+  protection_paused_at timestamptz,
   queued_uploads integer not null default 0 check (queued_uploads between 0 and 500),
   reported_at timestamptz not null default now()
 );
 alter table public.android_device_status add column if not exists battery_percent integer;
 alter table public.android_device_status add column if not exists protection_enabled boolean not null default true;
+alter table public.android_device_status add column if not exists protection_paused_at timestamptz;
 do $$ begin
   alter table public.android_device_status add constraint android_device_status_battery_percent_check
     check (battery_percent between 0 and 100);
@@ -59,3 +61,36 @@ do $$ begin
   alter publication supabase_realtime add table public.android_device_status;
 exception when duplicate_object then null;
 end $$;
+
+-- Separate app-usage aggregates; never mix app activity with GPS location rows.
+create table if not exists public.android_app_usage_daily (
+  event_id text not null,
+  device_id uuid not null references public.android_devices(device_id) on delete cascade,
+  member_id uuid not null references public.family_members(id) on delete cascade,
+  usage_date date not null,
+  package_name text not null,
+  app_name text not null,
+  usage_ms bigint not null check (usage_ms between 0 and 86400000),
+  last_used_at timestamptz,
+  synced_at timestamptz not null default now(),
+  primary key (device_id, usage_date, package_name),
+  unique (event_id)
+);
+create index if not exists android_app_usage_member_date_idx
+  on public.android_app_usage_daily(member_id, usage_date desc, usage_ms desc);
+alter table public.android_app_usage_daily enable row level security;
+grant all on public.android_app_usage_daily to service_role;
+
+create table if not exists public.android_app_usage_status (
+  device_id uuid primary key references public.android_devices(device_id) on delete cascade,
+  member_id uuid not null references public.family_members(id) on delete cascade,
+  collection_enabled boolean not null default false,
+  usage_access_granted boolean not null default false,
+  collection_status text not null check (collection_status in ('DISABLED', 'PERMISSION_REQUIRED', 'READY', 'INCOMPLETE')),
+  collected_at timestamptz not null,
+  reported_at timestamptz not null default now()
+);
+create index if not exists android_app_usage_status_member_idx
+  on public.android_app_usage_status(member_id, reported_at desc);
+alter table public.android_app_usage_status enable row level security;
+grant all on public.android_app_usage_status to service_role;

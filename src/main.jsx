@@ -3,12 +3,23 @@ import { createRoot } from "react-dom/client";
 import { createClient } from "@supabase/supabase-js";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import markerIconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
+import markerIconUrl from "leaflet/dist/images/marker-icon.png";
+import markerShadowUrl from "leaflet/dist/images/marker-shadow.png";
 import "./style.css";
 import { createLocationProvider, getProviderStatus, LocationProviderError } from "./location/providers.js";
 import { persistLocationResult } from "./location/persistence.js";
 import { isInJakartaDateTimeRange, jakartaDateInputValue, jakartaMidnightUtc, nextDateInputValue } from "./location/history-time.js";
 import { buildRouteSegments } from "./location/map-route.js";
 import { groupHistoryRecords, isWithinRelativeWindow } from "./location/history-groups.js";
+
+// Resolve Leaflet's marker images through Vite so production builds don't
+// request the package-relative paths that can render as a broken "Marker" image.
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: markerIconRetinaUrl,
+  iconUrl: markerIconUrl,
+  shadowUrl: markerShadowUrl
+});
 
 const locationProviderName = import.meta.env.VITE_LOCATION_PROVIDER || "unavailable";
 const onlineThresholdMinutes = Math.max(1, Number(import.meta.env.VITE_LOCATION_ONLINE_MINUTES) || 2);
@@ -49,6 +60,14 @@ function hasValidCoordinates(row) {
   return Number.isFinite(latitude) && Number.isFinite(longitude) && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180;
 }
 
+function formatUsageDuration(milliseconds) {
+  const minutes = Math.floor(Math.max(0, Number(milliseconds) || 0) / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  if (hours) return remainder ? hours + " jam " + remainder + " mnt" : hours + " jam";
+  return minutes + " mnt";
+}
+
 function RefreshIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -84,6 +103,14 @@ function Dashboard() {
   const [locationHistory, setLocationHistory] = useState([]);
   const [deviceDiagnostics, setDeviceDiagnostics] = useState(null);
   const [deviceDiagnosticsError, setDeviceDiagnosticsError] = useState("");
+  const [appUsageDate, setAppUsageDate] = useState(() => jakartaDateInputValue());
+  const [appUsageRecords, setAppUsageRecords] = useState([]);
+  const [appUsageStatus, setAppUsageStatus] = useState(null);
+  const [appUsageLoading, setAppUsageLoading] = useState(false);
+  const [appUsageError, setAppUsageError] = useState("");
+  const [expandedUsageEventId, setExpandedUsageEventId] = useState(null);
+  const [appUsageDashboardKey, setAppUsageDashboardKey] = useState(() => sessionStorage.getItem("app-usage-dashboard-key") || "");
+  const [appUsageDashboardKeyDraft, setAppUsageDashboardKeyDraft] = useState("");
   const [adminMessageDraft, setAdminMessageDraft] = useState("");
   const [sendingAdminMessage, setSendingAdminMessage] = useState(false);
   const [adminMessageNotice, setAdminMessageNotice] = useState("");
@@ -124,6 +151,7 @@ function Dashboard() {
   const sheetPointerStartRef = useRef(null);
   const suppressSheetClickRef = useRef(false);
   const historyRequestSequenceRef = useRef(0);
+  const appUsageRequestSequenceRef = useRef(0);
   historyQueryFiltersRef.current = { historyStartDate, historyEndDate, historyStartHour, historyEndHour, historyRangeMode, historyInterval };
   selectedMemberIdRef.current = selected?.id;
 
@@ -209,7 +237,7 @@ function Dashboard() {
     }
     const { data, error } = await supabase
       .from("android_device_status")
-      .select("device_id,location_permission,background_permission,foreground_service,location_services,network_online,battery_optimization_exempt,battery_percent,protection_enabled,queued_uploads,reported_at")
+      .select("device_id,location_permission,background_permission,foreground_service,location_services,network_online,battery_optimization_exempt,battery_percent,protection_enabled,protection_paused_at,queued_uploads,reported_at")
       .eq("member_id", memberId)
       .order("reported_at", { ascending: false })
       .limit(1)
@@ -225,11 +253,43 @@ function Dashboard() {
     }
   }
 
+  async function loadAppUsage(member = selected, date = appUsageDate) {
+    const requestSequence = ++appUsageRequestSequenceRef.current;
+    if (!supabase || !member?.id || !member?.tracking_token || !appUsageDashboardKey) {
+      setAppUsageRecords([]);
+      setAppUsageStatus(null);
+      setAppUsageError("");
+      return;
+    }
+    setAppUsageLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("android-app-usage-read", {
+        body: { trackingToken: member.tracking_token, memberId: member.id, usageDate: date },
+        headers: { "x-app-usage-dashboard-key": appUsageDashboardKey }
+      });
+      if (error) throw error;
+      if (requestSequence === appUsageRequestSequenceRef.current) {
+        setAppUsageRecords(Array.isArray(data?.records) ? data.records : []);
+        setAppUsageStatus(data?.status || null);
+        setAppUsageError("");
+      }
+    } catch (error) {
+      if (requestSequence === appUsageRequestSequenceRef.current) {
+        setAppUsageError(error.message || "Riwayat penggunaan aplikasi gagal dimuat.");
+        setAppUsageRecords([]);
+        setAppUsageStatus(null);
+      }
+    } finally {
+      if (requestSequence === appUsageRequestSequenceRef.current) setAppUsageLoading(false);
+    }
+  }
+
   async function handleRefresh() {
     await loadMembers();
     if (selected?.id) {
       await loadLocationHistory(selected.id);
       await loadDeviceDiagnostics(selected.id);
+      await loadAppUsage(selected, appUsageDate);
     }
   }
 
@@ -277,9 +337,33 @@ function Dashboard() {
       .channel("locations")
       .on("postgres_changes",
         { event: "*", schema: "public", table: "locations" },
-        () => {
-          loadMembers();
-          if (selected?.id) loadLocationHistory(selected.id);
+        (payload) => {
+          const changedMemberId = payload.new?.member_id || payload.old?.member_id;
+          const activeMemberId = selectedMemberIdRef.current;
+          if (!activeMemberId || changedMemberId !== activeMemberId) return;
+          loadLocationHistory(activeMemberId);
+          const location = payload.new;
+          const recordedAtMs = new Date(location?.recorded_at).getTime();
+          if (payload.eventType !== "INSERT" || !Number.isFinite(recordedAtMs) || !hasValidCoordinates(location)) return;
+          const applyLatestLocation = member => {
+            if (member?.id !== activeMemberId) return member;
+            const currentLastSeenMs = new Date(member.last_seen || 0).getTime();
+            if (Number.isFinite(currentLastSeenMs) && recordedAtMs < currentLastSeenMs) return member;
+            const source = location.source || location.platform ||
+              (location.provider === "android" ? "ANDROID" : location.provider === "browser" ? "BROWSER" : null);
+            return {
+              ...member,
+              latitude: Number(location.latitude),
+              longitude: Number(location.longitude),
+              accuracy: location.accuracy,
+              last_seen: location.recorded_at,
+              last_source: source || member.last_source,
+              last_provider: location.provider || (source === "ANDROID" ? "android" : member.last_provider),
+              device_seen_at: source === "ANDROID" ? new Date().toISOString() : member.device_seen_at
+            };
+          };
+          setSelected(current => applyLatestLocation(current));
+          setMembers(current => current.map(applyLatestLocation));
         }
       )
       .on("postgres_changes",
@@ -290,6 +374,21 @@ function Dashboard() {
 
     return () => supabase.removeChannel(channel);
   }, [selected?.id]);
+
+  useEffect(() => {
+    setExpandedUsageEventId(null);
+    loadAppUsage(selected, appUsageDate);
+  }, [selected?.id, appUsageDate]);
+
+  useEffect(() => {
+    if (appUsageDashboardKey) loadAppUsage(selected, appUsageDate);
+  }, [appUsageDashboardKey]);
+
+  useEffect(() => {
+    if (!selected?.id || !appUsageDashboardKey) return;
+    const timer = window.setInterval(() => loadAppUsage(selected, appUsageDate), 60_000);
+    return () => window.clearInterval(timer);
+  }, [selected?.id, appUsageDate, appUsageDashboardKey]);
 
   useEffect(() => {
     if (!selected?.id) {
@@ -789,6 +888,7 @@ function Dashboard() {
                 {deviceDiagnosticsError ? <p className="muted">Gagal memuat diagnostik: {deviceDiagnosticsError}. Jalankan ulang supabase/android-location.sql di Supabase SQL Editor.</p> : !deviceDiagnostics ? <p className="muted">Belum ada laporan diagnostik. Pasang APK Android terbaru, deploy ulang android-location-ingest, lalu tunggu Android mengirim lokasi berikutnya.</p> : <>
                   <p className="muted">Laporan: {new Date(deviceDiagnostics.reported_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}{Date.now() - new Date(deviceDiagnostics.reported_at).getTime() > offlineThresholdMs ? " · data mungkin sudah lama" : ""}</p>
                   <p><b>Perlindungan lokasi:</b> {deviceDiagnostics.protection_enabled ? "Aktif" : "Dijeda dari perangkat"}</p>
+                  {deviceDiagnostics.protection_paused_at && <p><b>Jeda terakhir dari Android:</b> {new Date(deviceDiagnostics.protection_paused_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta", dateStyle: "full", timeStyle: "medium" })}</p>}
                   <p><b>Izin lokasi:</b> {deviceDiagnostics.location_permission ? "Diizinkan" : "Belum diizinkan"}</p>
                   <p><b>Izin latar belakang:</b> {deviceDiagnostics.background_permission ? "Diizinkan" : "Belum diizinkan"}</p>
                   <p><b>Foreground service:</b> {deviceDiagnostics.foreground_service ? "Aktif · layanan lokasi berjalan di latar dengan notifikasi persisten" : "Tidak aktif · lokasi latar tidak sedang dipantau"}</p>
@@ -799,6 +899,43 @@ function Dashboard() {
                   <p><b>Antrean upload lokal:</b> {deviceDiagnostics.queued_uploads} dari 500</p>
                 </>}
               </div>
+
+              <section className="app-usage-section" aria-labelledby="app-usage-title">
+                <div className="app-usage-heading">
+                  <div>
+                    <h3 id="app-usage-title">App Usage History</h3>
+                    <p className="muted">{new Date(appUsageDate + "T12:00:00").toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", dateStyle: "full" })}</p>
+                  </div>
+                  <label className="app-usage-date-label">Tanggal
+                    <input type="date" value={appUsageDate} onChange={event => setAppUsageDate(event.target.value)} />
+                  </label>
+                </div>
+                {!appUsageDashboardKey ? <div className="app-usage-key-entry"><p className="muted">Masukkan kunci dashboard yang diset sebagai secret Supabase untuk membuka data penggunaan aplikasi.</p><input type="password" value={appUsageDashboardKeyDraft} onChange={event => setAppUsageDashboardKeyDraft(event.target.value)} placeholder="Kunci dashboard" aria-label="Kunci dashboard App Usage History" /><button type="button" className="secondary" onClick={() => { const key = appUsageDashboardKeyDraft.trim(); if (!key) return; sessionStorage.setItem("app-usage-dashboard-key", key); setAppUsageDashboardKey(key); setAppUsageDashboardKeyDraft(""); }}>Buka App Usage History</button></div> : appUsageLoading ? <p className="muted">Memuat riwayat penggunaan…</p> : appUsageError ? <><p className="muted">{appUsageError}</p><input type="password" value={appUsageDashboardKeyDraft} onChange={event => setAppUsageDashboardKeyDraft(event.target.value)} placeholder="Masukkan kunci dashboard" aria-label="Kunci dashboard App Usage History" /><button type="button" className="secondary" onClick={() => { const key = appUsageDashboardKeyDraft.trim(); if (!key) return; sessionStorage.setItem("app-usage-dashboard-key", key); setAppUsageDashboardKey(key); setAppUsageDashboardKeyDraft(""); }}>Coba lagi</button></> : !appUsageStatus ? <p className="muted">Belum ada status penggunaan dari perangkat Android. Aktifkan pencatatan dan Usage Access di aplikasi note.</p> : appUsageStatus.collection_status === "DISABLED" ? <p className="muted">Pencatatan penggunaan aplikasi sedang nonaktif di Android.</p> : appUsageStatus.collection_status === "PERMISSION_REQUIRED" ? <p className="muted">Usage Access belum diizinkan oleh pemilik perangkat. Pengumpulan belum berjalan.</p> : appUsageRecords.length === 0 ? <p className="muted">Tidak ada ringkasan penggunaan untuk tanggal ini. Laporan perangkat terakhir: {new Date(appUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}.</p> : <>
+                  <p className="muted">Pembaruan: {new Date(appUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}. Durasi adalah total waktu aplikasi tampil di depan.</p>
+                  <ul className="app-usage-list">
+                    {appUsageRecords.map(record => <li key={record.event_id}>
+                      <button type="button" className="app-usage-row" aria-expanded={expandedUsageEventId === record.event_id} onClick={() => setExpandedUsageEventId(current => current === record.event_id ? null : record.event_id)}>
+                        <span className="app-usage-icon" aria-hidden="true">{(record.app_name || record.package_name || "?").slice(0, 1).toUpperCase()}</span>
+                        <span className="app-usage-name"><strong>{record.app_name}</strong><small>{record.package_name}</small></span>
+                        <span className="app-usage-total">{formatUsageDuration(record.usage_ms)}</span>
+                      </button>
+                      {expandedUsageEventId === record.event_id && <div className="app-usage-details">
+                        <p><b>Waktu penggunaan:</b> total {formatUsageDuration(record.usage_ms)}</p>
+                        <p><b>Terakhir digunakan:</b> {record.last_used_at ? new Date(record.last_used_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" }) : "Tidak tersedia"}</p>
+                        <p>Android menyediakan agregat durasi untuk hari ini, bukan rangkaian waktu mulai dan selesai yang selalu lengkap.</p>
+                        <p>Riwayat domain untuk aplikasi ini tidak tersedia dari Usage Access.</p>
+                      </div>}
+                    </li>)}
+                  </ul>
+                </>}
+                {appUsageStatus?.collection_status === "INCOMPLETE" && <p className="muted">Laporan Android tidak lengkap; hanya agregat yang berhasil dibaca yang ditampilkan.</p>}
+              </section>
+
+              <section className="web-safety-section" aria-labelledby="web-safety-title">
+                <h3 id="web-safety-title">Web Safety Monitor</h3>
+                <p className="muted">Belum ada sumber pengamatan domain yang dikonfigurasi. Android Usage Access hanya melaporkan durasi aplikasi dan tidak membuka riwayat URL atau domain browser. Tidak ada domain maupun status ancaman yang dibuat atau diasumsikan.</p>
+                <p className="muted">Pemantauan domain memerlukan komponen terpisah dengan persetujuan sistem Android dan notifikasi yang terlihat. DNS dapat menunjukkan domain yang teramati di jaringan, tetapi tidak memastikan halaman dibuka atau aplikasi sumbernya.</p>
+              </section>
 
               {["mock", "orange-playground"].includes(locationProviderName) && (
                 <button type="button" className="icon-button" onClick={requestLatestLocation} disabled={requestingLocation}>
