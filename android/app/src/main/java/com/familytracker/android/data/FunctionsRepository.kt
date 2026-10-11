@@ -88,4 +88,33 @@ class FunctionsRepository {
             .put("collectedAt", collectedAt)
             .put("records", payloadRecords))
     }
+
+    suspend fun syncDomains(
+        trackingToken: String,
+        memberId: String,
+        deviceId: String,
+        monitoringEnabled: Boolean,
+        vpnPermissionGranted: Boolean,
+        observedAt: String,
+        records: List<DomainObservation>
+    ): JSONObject = withContext(Dispatchers.IO) {
+        val payloadRecords = JSONArray()
+        records.forEach { record ->
+            payloadRecords.put(JSONObject()
+                .put("eventId", record.eventId)
+                .put("observationDate", record.observationDate)
+                .put("domain", record.domain)
+                .put("queryCount", record.queryCount)
+                .put("firstSeenAt", record.firstSeenAt)
+                .put("lastSeenAt", record.lastSeenAt))
+        }
+        call("android-domain-ingest", JSONObject()
+            .put("trackingToken", trackingToken)
+            .put("memberId", memberId)
+            .put("deviceId", deviceId)
+            .put("monitoringEnabled", monitoringEnabled)
+            .put("vpnPermissionGranted", vpnPermissionGranted)
+            .put("observedAt", observedAt)
+            .put("records", payloadRecords))
+    }
 }

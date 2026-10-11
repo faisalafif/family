@@ -94,3 +94,33 @@ create index if not exists android_app_usage_status_member_idx
   on public.android_app_usage_status(member_id, reported_at desc);
 alter table public.android_app_usage_status enable row level security;
 grant all on public.android_app_usage_status to service_role;
+
+-- DNS-observed domain aggregates from the user's explicitly enabled Android VPN monitor.
+create table if not exists public.android_domain_observations (
+  event_id text not null unique,
+  device_id uuid not null references public.android_devices(device_id) on delete cascade,
+  member_id uuid not null references public.family_members(id) on delete cascade,
+  observation_date date not null,
+  domain text not null,
+  query_count integer not null check (query_count between 1 and 1000000),
+  first_seen_at timestamptz not null,
+  last_seen_at timestamptz not null,
+  synced_at timestamptz not null default now(),
+  primary key (device_id, observation_date, domain)
+);
+create index if not exists android_domain_observations_member_date_idx
+  on public.android_domain_observations(member_id, observation_date desc, query_count desc);
+alter table public.android_domain_observations enable row level security;
+grant all on public.android_domain_observations to service_role;
+
+create table if not exists public.android_domain_monitor_status (
+  device_id uuid primary key references public.android_devices(device_id) on delete cascade,
+  member_id uuid not null references public.family_members(id) on delete cascade,
+  monitoring_enabled boolean not null default false,
+  vpn_permission_granted boolean not null default false,
+  reported_at timestamptz not null default now()
+);
+create index if not exists android_domain_monitor_status_member_idx
+  on public.android_domain_monitor_status(member_id, reported_at desc);
+alter table public.android_domain_monitor_status enable row level security;
+grant all on public.android_domain_monitor_status to service_role;

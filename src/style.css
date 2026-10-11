@@ -121,6 +121,10 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .app-usage-details { padding: 8px 10px 2px 58px; color: #475467; font-size: 12px; line-height: 1.45; }
 .app-usage-details p { margin: 0 0 7px; }
 .web-safety-section { border: 1px solid #e7ebf0; background: #fff; }
+.domain-observation-list { display: grid; gap: 8px; margin: 10px 0; padding: 0; list-style: none; }
+.domain-observation-row { display: grid; gap: 5px; padding: 10px 12px; border-radius: 9px; background: #f8fafc; overflow-wrap: anywhere; }
+.domain-observation-row > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+.domain-observation-row > div span, .domain-observation-row small { color: #667085; font-size: 12px; }
 .admin-message-compose { margin: 14px 0; padding: 12px; border-radius: 10px; background: #f8fafc; }
 .admin-message-compose h3 { margin: 0 0 8px; font-size: 14px; }
 .admin-message-compose .secondary { margin-top: 8px; }

@@ -13,5 +13,11 @@ verify_jwt = false
 [functions.android-app-usage-read]
 verify_jwt = false
 
+[functions.android-domain-ingest]
+verify_jwt = false
+
+[functions.android-domain-read]
+verify_jwt = false
+
 [functions.location-request]
 verify_jwt = true

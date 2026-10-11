@@ -108,6 +108,10 @@ function Dashboard() {
   const [appUsageLoading, setAppUsageLoading] = useState(false);
   const [appUsageError, setAppUsageError] = useState("");
   const [expandedUsageEventId, setExpandedUsageEventId] = useState(null);
+  const [domainMonitorRecords, setDomainMonitorRecords] = useState([]);
+  const [domainMonitorStatus, setDomainMonitorStatus] = useState(null);
+  const [domainMonitorLoading, setDomainMonitorLoading] = useState(false);
+  const [domainMonitorError, setDomainMonitorError] = useState("");
   const [appUsageDashboardKey, setAppUsageDashboardKey] = useState(() => sessionStorage.getItem("app-usage-dashboard-key") || "");
   const [appUsageDashboardKeyDraft, setAppUsageDashboardKeyDraft] = useState("");
   const [adminMessageDraft, setAdminMessageDraft] = useState("");
@@ -151,6 +155,7 @@ function Dashboard() {
   const suppressSheetClickRef = useRef(false);
   const historyRequestSequenceRef = useRef(0);
   const appUsageRequestSequenceRef = useRef(0);
+  const domainMonitorRequestSequenceRef = useRef(0);
   historyQueryFiltersRef.current = { historyStartDate, historyEndDate, historyStartHour, historyEndHour, historyRangeMode, historyInterval };
   selectedMemberIdRef.current = selected?.id;
 
@@ -283,12 +288,44 @@ function Dashboard() {
     }
   }
 
+  async function loadDomainMonitor(member = selected, date = appUsageDate) {
+    const requestSequence = ++domainMonitorRequestSequenceRef.current;
+    if (!supabase || !member?.id || !member?.tracking_token || !appUsageDashboardKey) {
+      setDomainMonitorRecords([]);
+      setDomainMonitorStatus(null);
+      setDomainMonitorError("");
+      return;
+    }
+    setDomainMonitorLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("android-domain-read", {
+        body: { trackingToken: member.tracking_token, memberId: member.id, observationDate: date },
+        headers: { "x-app-usage-dashboard-key": appUsageDashboardKey }
+      });
+      if (error) throw error;
+      if (requestSequence === domainMonitorRequestSequenceRef.current) {
+        setDomainMonitorRecords(Array.isArray(data?.records) ? data.records : []);
+        setDomainMonitorStatus(data?.status || null);
+        setDomainMonitorError("");
+      }
+    } catch (error) {
+      if (requestSequence === domainMonitorRequestSequenceRef.current) {
+        setDomainMonitorError(error.message || "Riwayat domain gagal dimuat.");
+        setDomainMonitorRecords([]);
+        setDomainMonitorStatus(null);
+      }
+    } finally {
+      if (requestSequence === domainMonitorRequestSequenceRef.current) setDomainMonitorLoading(false);
+    }
+  }
+
   async function handleRefresh() {
     await loadMembers();
     if (selected?.id) {
       await loadLocationHistory(selected.id);
       await loadDeviceDiagnostics(selected.id);
       await loadAppUsage(selected, appUsageDate);
+      await loadDomainMonitor(selected, appUsageDate);
     }
   }
 
@@ -377,15 +414,22 @@ function Dashboard() {
   useEffect(() => {
     setExpandedUsageEventId(null);
     loadAppUsage(selected, appUsageDate);
+    loadDomainMonitor(selected, appUsageDate);
   }, [selected?.id, appUsageDate]);
 
   useEffect(() => {
-    if (appUsageDashboardKey) loadAppUsage(selected, appUsageDate);
+    if (appUsageDashboardKey) {
+      loadAppUsage(selected, appUsageDate);
+      loadDomainMonitor(selected, appUsageDate);
+    }
   }, [appUsageDashboardKey]);
 
   useEffect(() => {
     if (!selected?.id || !appUsageDashboardKey) return;
-    const timer = window.setInterval(() => loadAppUsage(selected, appUsageDate), 60_000);
+    const timer = window.setInterval(() => {
+      loadAppUsage(selected, appUsageDate);
+      loadDomainMonitor(selected, appUsageDate);
+    }, 60_000);
     return () => window.clearInterval(timer);
   }, [selected?.id, appUsageDate, appUsageDashboardKey]);
 
@@ -934,8 +978,16 @@ function Dashboard() {
 
               <section className="web-safety-section" aria-labelledby="web-safety-title">
                 <h3 id="web-safety-title">Web Safety Monitor</h3>
-                <p className="muted">Belum ada sumber pengamatan domain yang dikonfigurasi. Android Usage Access hanya melaporkan durasi aplikasi dan tidak membuka riwayat URL atau domain browser. Tidak ada domain maupun status ancaman yang dibuat atau diasumsikan.</p>
-                <p className="muted">Pemantauan domain memerlukan komponen terpisah dengan persetujuan sistem Android dan notifikasi yang terlihat. DNS dapat menunjukkan domain yang teramati di jaringan, tetapi tidak memastikan halaman dibuka atau aplikasi sumbernya.</p>
+                {domainMonitorError ? <p className="muted">Gagal memuat domain: {domainMonitorError}</p> : domainMonitorLoading ? <p className="muted">Memuat domain teramati…</p> : !appUsageDashboardKey ? <p className="muted">Gunakan kunci dashboard yang sama dengan App Usage History untuk membaca domain teramati.</p> : !domainMonitorStatus ? <p className="muted">Belum ada laporan monitor domain dari Android. Aktifkan Web Safety Monitor di aplikasi note dan setujui permintaan VPN Android.</p> : <>
+                  <p className="muted">Status perangkat: {domainMonitorStatus.monitoring_enabled && domainMonitorStatus.vpn_permission_granted ? "Pemantauan aktif" : "Pemantauan nonaktif"}. Laporan: {new Date(domainMonitorStatus.reported_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}.</p>
+                  {domainMonitorRecords.length === 0 ? <p className="muted">Belum ada domain DNS yang tercatat untuk tanggal ini.</p> : <ul className="domain-observation-list">
+                    {domainMonitorRecords.map(record => <li className="domain-observation-row" key={record.event_id}>
+                      <div><strong>{record.domain}</strong><span>{record.query_count} query · {new Date(record.first_seen_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}–{new Date(record.last_seen_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}</span></div>
+                      <small>Belum diperiksa terhadap sumber reputasi/phishing.</small>
+                    </li>)}
+                  </ul>}
+                  <p className="muted">Ini adalah nama domain yang terlihat pada DNS, bukan bukti halaman dibuka. URL lengkap, isi halaman, dan aplikasi sumber tidak tersedia. DNS terenkripsi dapat membuat sebagian domain tidak terlihat.</p>
+                </>}
               </section>
 
               {["mock", "orange-playground"].includes(locationProviderName) && (

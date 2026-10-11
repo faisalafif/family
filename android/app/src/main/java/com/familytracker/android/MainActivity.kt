@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.VpnService
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
@@ -55,7 +56,9 @@ import com.familytracker.android.data.FunctionsRepository
 import com.familytracker.android.data.LocalDatabase
 import com.familytracker.android.data.AppUsageCollector
 import com.familytracker.android.service.LocationForegroundService
+import com.familytracker.android.service.DomainMonitorVpnService
 import com.familytracker.android.worker.AppUsageSync
+import com.familytracker.android.worker.DomainMonitorSync
 import com.familytracker.android.worker.ProtectionStatusSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -97,6 +100,8 @@ private fun FamilyTrackerApp() {
     var serviceRunning by remember { mutableStateOf(isLocationServiceRunning(context)) }
     var appUsageEnabled by remember { mutableStateOf(prefs.appUsageEnabled) }
     var hasUsageAccess by remember { mutableStateOf(AppUsageCollector.hasUsageAccess(context)) }
+    var domainMonitorRunning by remember { mutableStateOf(prefs.domainMonitorRunning) }
+    var waitingForVpnConsent by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) {
@@ -106,6 +111,7 @@ private fun FamilyTrackerApp() {
             serviceRunning = isLocationServiceRunning(context)
             appUsageEnabled = prefs.appUsageEnabled
             hasUsageAccess = AppUsageCollector.hasUsageAccess(context)
+            domainMonitorRunning = prefs.domainMonitorRunning
             if (prefs.memberId != null) AppUsageSync.schedule(context)
             screenRefresh++
         } }
@@ -127,10 +133,45 @@ private fun FamilyTrackerApp() {
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         hasNotification = it
         if (!it) {
-            message = "Izin notifikasi diperlukan agar status layanan lokasi terlihat."
+            if (waitingForVpnConsent) {
+                waitingForVpnConsent = false
+                message = "Izin notifikasi diperlukan agar pemantauan domain terlihat saat aktif."
+            } else message = "Izin notifikasi diperlukan agar status layanan lokasi terlihat."
             autoStartAfterLink = false
         }
         screenRefresh++
+    }
+    val vpnConsentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        waitingForVpnConsent = false
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            prefs.domainMonitorEnabled = true
+            ContextCompat.startForegroundService(context, Intent(context, DomainMonitorVpnService::class.java).setAction(DomainMonitorVpnService.ACTION_START))
+            message = "Pemantauan domain aktif. DNS akan diamati; Android menampilkan notifikasi layanan selama fitur berjalan."
+            domainMonitorRunning = true
+        } else {
+            message = "Izin VPN belum diberikan. Pemantauan domain tetap nonaktif."
+            prefs.domainMonitorEnabled = false
+        }
+        screenRefresh++
+    }
+
+    val requestVpnConsent: () -> Unit = {
+        val intent = VpnService.prepare(context)
+        if (intent == null) {
+            prefs.domainMonitorEnabled = true
+            ContextCompat.startForegroundService(context, Intent(context, DomainMonitorVpnService::class.java).setAction(DomainMonitorVpnService.ACTION_START))
+            message = "Pemantauan domain diaktifkan. Android menampilkan notifikasi layanan selama fitur berjalan."
+            domainMonitorRunning = true
+        } else {
+            vpnConsentLauncher.launch(intent)
+        }
+    }
+
+    LaunchedEffect(waitingForVpnConsent, hasNotification) {
+        if (waitingForVpnConsent && hasNotification) {
+            waitingForVpnConsent = false
+            requestVpnConsent()
+        }
     }
 
     val requestForegroundPermission: () -> Unit = {
@@ -157,7 +198,7 @@ private fun FamilyTrackerApp() {
     DisposableEffect(prefs) {
         val mainHandler = Handler(Looper.getMainLooper())
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key in setOf("protection_enabled", "protection_pause_sync_pending", "last_update", "last_accuracy", "last_status", "admin_message", "admin_message_sync_error")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context) }
+            if (key in setOf("protection_enabled", "protection_pause_sync_pending", "last_update", "last_accuracy", "last_status", "admin_message", "admin_message_sync_error", "domain_monitor_enabled", "domain_monitor_running", "domain_monitor_error")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context); domainMonitorRunning = prefs.domainMonitorRunning }
         }
         prefs.addListener(listener)
         onDispose { prefs.removeListener(listener) }
@@ -315,6 +356,46 @@ private fun FamilyTrackerApp() {
                         } else if (appUsageEnabled) {
                             Text("Usage Access diizinkan. Ringkasan diperbarui berkala dan tersimpan sementara saat offline.", color = Color(0xFF16834A), style = MaterialTheme.typography.bodySmall)
                         }
+                    }
+                }
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    shape = RoundedCornerShape(22.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                ) {
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Web Safety Monitor", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
+                        Text("Opsional. Saat aktif, aplikasi memakai VPN lokal Android untuk mencatat nama domain dari query DNS. Aplikasi tidak membaca URL lengkap, isi halaman, pesan, atau kata sandi. Sebagian DNS terenkripsi mungkin tidak terlihat. Belum ada pemeriksaan reputasi/phishing pada domain.", color = Color(0xFF68778C), style = MaterialTheme.typography.bodySmall)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (domainMonitorRunning) "Pemantauan domain aktif" else "Pemantauan domain nonaktif", color = Ink, fontWeight = FontWeight.SemiBold)
+                            Switch(
+                                checked = domainMonitorRunning,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        if (prefs.memberId == null) {
+                                            message = "Tautkan perangkat ke anggota keluarga lebih dulu."
+                                        } else if (Build.VERSION.SDK_INT >= 33 && !hasNotification) {
+                                            waitingForVpnConsent = true
+                                            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                        } else requestVpnConsent()
+                                    } else {
+                                        waitingForVpnConsent = false
+                                        prefs.domainMonitorEnabled = false
+                                        prefs.domainMonitorRunning = false
+                                        domainMonitorRunning = false
+                                        context.startService(Intent(context, DomainMonitorVpnService::class.java).setAction(DomainMonitorVpnService.ACTION_STOP))
+                                        DomainMonitorSync.requestNow(context)
+                                        message = "Pemantauan domain dihentikan."
+                                    }
+                                }
+                            )
+                        }
+                        if (domainMonitorRunning) {
+                            Text("Persetujuan VPN aktif. Notifikasi Android akan tetap terlihat saat pemantauan berjalan. Ketuk Jeda untuk menghentikan.", color = Color(0xFF16834A), style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            Text("Pemantauan hanya dimulai setelah tombol diaktifkan dan izin VPN disetujui di dialog Android.", color = Color(0xFF68778C), style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (prefs.domainMonitorError.isNotBlank()) Text("Monitor tidak dapat dimulai: ${prefs.domainMonitorError}", color = Color(0xFFB42318), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
