@@ -44,10 +44,16 @@ button[type="submit"] { background: #111827; color: white; }
 .map-wrap { position: relative; }
 .map { min-height: 400px; }
 .selected-location-marker { border: 0; background: transparent; }
-.map-mode-control { position: absolute; z-index: 500; top: 12px; right: 12px; width: min(270px, calc(100% - 24px)); padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 10px; background: rgba(255,255,255,.96); box-shadow: 0 2px 10px rgba(0,0,0,.14); }
+.map-control-stack { position: absolute; z-index: 500; top: 12px; right: 12px; width: min(270px, calc(100% - 24px)); }
+.map-mode-control { width: 100%; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 10px; background: rgba(255,255,255,.96); box-shadow: 0 2px 10px rgba(0,0,0,.14); }
 .map-mode-control label { margin-bottom: 4px; }
 .map-mode-control select { margin: 0 0 5px; }
 .map-mode-control small { display: block; color: #667085; font-size: 11px; line-height: 1.4; }
+.map-refresh-button { display: grid; place-items: center; width: 40px; height: 40px; margin: 6px 0 0 auto; border: 1px solid #d0d5dd; border-radius: 10px; background: rgba(255,255,255,.96); color: #344054; box-shadow: 0 2px 10px rgba(0,0,0,.14); }
+.map-refresh-button svg { width: 20px; height: 20px; }
+.map-refresh-button:disabled { cursor: wait; opacity: .65; }
+.map-refresh-button.is-refreshing svg { animation: refresh-spin .8s linear infinite; }
+@keyframes refresh-spin { to { transform: rotate(360deg); } }
 .map-action-controls { display: none; }
 .history-raw-map-button { padding: 3px 0; background: transparent; color: #2563eb; text-align: left; font-size: 11px; }
 label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 5px; color: #475467; }
@@ -175,10 +181,12 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
   .map-action-controls { position: absolute; top: calc(10px + env(safe-area-inset-top, 0px)); left: 58px; z-index: 600; display: flex; flex-wrap: wrap; gap: 5px; width: min(150px, calc(100vw - 230px)); padding: 0; border: 0; background: transparent; box-shadow: none; }
   .map-action-controls button { flex: 1 1 44px; min-height: 40px; padding: 7px 8px; border: 1px solid #d0d5dd; border-radius: 10px; background: rgba(255,255,255,.96); color: #18202a; box-shadow: 0 2px 8px rgba(0,0,0,.14); font-size: 11px; font-weight: 650; }
   .map-action-controls button:disabled { opacity: .55; }
-  .map-mode-control { top: calc(10px + env(safe-area-inset-top, 0px)); right: 10px; width: min(145px, calc(100vw - 210px)); padding: 7px 9px; }
+  .map-control-stack { top: calc(10px + env(safe-area-inset-top, 0px)); right: 10px; width: min(145px, calc(100vw - 210px)); }
+  .map-mode-control { padding: 7px 9px; }
   .map-mode-control label { font-size: 10px; }
   .map-mode-control select { min-height: 40px; padding: 7px; margin-bottom: 0; font-size: 12px; }
   .map-mode-control small { display: none; }
+  .map-refresh-button { width: 40px; height: 40px; }
   .leaflet-popup-content-wrapper { max-width: min(78vw, 300px); }
   .leaflet-popup-content { max-width: 68vw; overflow-wrap: anywhere; }
   .history-list { gap: 7px; }
@@ -187,6 +195,7 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 }
 
 @media (min-width: 801px) {
-  .history-sheet-handle, .mobile-filter-toggle, .mobile-filter-summary, .history-apply-button { display: none; }
+  .history-sheet-handle, .mobile-filter-toggle, .mobile-filter-summary { display: none; }
   .history-filter-controls { display: block; }
+  .history-apply-button { display: block; width: 100%; min-height: 42px; margin-top: 10px; border-radius: 10px; background: #2563eb; color: white; font-weight: 650; }
 }

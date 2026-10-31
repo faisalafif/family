@@ -6,7 +6,7 @@ import L from "leaflet";
 import "./style.css";
 import { createLocationProvider, getProviderStatus, LocationProviderError } from "./location/providers.js";
 import { persistLocationResult } from "./location/persistence.js";
-import { isInJakartaDateTimeRange, jakartaDateInputValue, jakartaMidnightUtc, nextDateInputValue } from "./location/history-time.js";
+import { isInJakartaDateTimeRange, jakartaDateInputValue, jakartaMidnightUtc, nextDateInputValue, timeFilterMinutes } from "./location/history-time.js";
 import { buildRouteSegments } from "./location/map-route.js";
 import { groupHistoryRecords, isWithinRelativeWindow } from "./location/history-groups.js";
 
@@ -118,6 +118,7 @@ function Dashboard() {
   const [sendingAdminMessage, setSendingAdminMessage] = useState(false);
   const [adminMessageNotice, setAdminMessageNotice] = useState("");
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [refreshingData, setRefreshingData] = useState(false);
   const [requestingLocation, setRequestingLocation] = useState(false);
   const [providerMessage, setProviderMessage] = useState("");
   const [historyFilter, setHistoryFilter] = useState("ALL");
@@ -137,6 +138,8 @@ function Dashboard() {
   const [historyEndDate, setHistoryEndDate] = useState(() => jakartaDateInputValue());
   const [historyStartHour, setHistoryStartHour] = useState("ALL");
   const [historyEndHour, setHistoryEndHour] = useState("ALL");
+  const [historyStartHourDraft, setHistoryStartHourDraft] = useState("ALL");
+  const [historyEndHourDraft, setHistoryEndHourDraft] = useState("ALL");
   const [clockNow, setClockNow] = useState(Date.now());
   const historyFilterClock = historyRangeMode === "relative" ? clockNow : 0;
   const historyQueryFiltersRef = useRef(null);
@@ -208,7 +211,9 @@ function Dashboard() {
       } else {
         const startBoundary = jakartaMidnightUtc(startDate);
         if (startBoundary) query = query.gte("recorded_at", startBoundary);
-        const crossesMidnight = startHour !== "ALL" && endHour !== "ALL" && Number(startHour) > Number(endHour);
+        const startMinute = timeFilterMinutes(startHour);
+        const endMinute = timeFilterMinutes(endHour);
+        const crossesMidnight = startMinute != null && endMinute != null && startMinute > endMinute;
         let dayAfterEnd = nextDateInputValue(endDate);
         if (crossesMidnight && dayAfterEnd) dayAfterEnd = nextDateInputValue(dayAfterEnd);
         const endBoundary = dayAfterEnd && jakartaMidnightUtc(dayAfterEnd);
@@ -320,12 +325,18 @@ function Dashboard() {
   }
 
   async function handleRefresh() {
-    await loadMembers();
-    if (selected?.id) {
-      await loadLocationHistory(selected.id);
-      await loadDeviceDiagnostics(selected.id);
-      await loadAppUsage(selected, appUsageDate);
-      await loadDomainMonitor(selected, appUsageDate);
+    if (refreshingData) return;
+    setRefreshingData(true);
+    try {
+      await loadMembers();
+      if (selected?.id) {
+        await loadLocationHistory(selected.id);
+        await loadDeviceDiagnostics(selected.id);
+        await loadAppUsage(selected, appUsageDate);
+        await loadDomainMonitor(selected, appUsageDate);
+      }
+    } finally {
+      setRefreshingData(false);
     }
   }
 
@@ -801,7 +812,7 @@ function Dashboard() {
   else if (historyStartDate || historyEndDate) activeFilterParts.push(`${historyStartDate || "…"} – ${historyEndDate || "…"}`);
   if (historyFilter !== "ALL") activeFilterParts.push(historyFilter === "ANDROID" ? "Android" : "Browser");
   if (historyRangeMode !== "relative" && historyInterval !== "1") activeFilterParts.push(historyInterval === "ALL" || Number(historyInterval) >= 30 ? "Semua titik" : `${historyInterval} menit per grup`);
-  if (historyRangeMode !== "relative" && (historyStartHour !== "ALL" || historyEndHour !== "ALL")) activeFilterParts.push(`${historyStartHour === "ALL" ? "00" : String(historyStartHour).padStart(2, "0")}:00–${historyEndHour === "ALL" ? "24" : String(historyEndHour).padStart(2, "0")}:00`);
+  if (historyRangeMode !== "relative" && (historyStartHour !== "ALL" || historyEndHour !== "ALL")) activeFilterParts.push(`${historyStartHour === "ALL" ? "00:00" : historyStartHour}–${historyEndHour === "ALL" ? "24:00" : historyEndHour}`);
   const activeFilterSummary = activeFilterParts.length ? activeFilterParts.join(" · ") : "Semua tanggal dan jam";
   useEffect(() => {
     if (!selectedHistoryId) return;
@@ -999,8 +1010,6 @@ function Dashboard() {
               <p className="muted provider-status"><b>Location provider:</b> {getProviderStatus(locationProviderName)}</p>
               {!["mock", "orange-playground"].includes(locationProviderName) && <p className="provider-message">Dashboard menerima lokasi yang sudah dikirim oleh Browser Tracker atau aplikasi Android saat perlindungan aktif. Tombol refresh hanya memuat ulang data tersimpan.</p>}
               {providerMessage && <p className="provider-message" role="status">{providerMessage}</p>}
-              <button type="button" className="secondary" onClick={handleRefresh}>Refresh data tersimpan</button>
-
               <div className="history-block">
                 <h3>Location history</h3>
                 <p className="muted">Garis rute menghubungkan titik berdasarkan waktu, dari titik awal ke titik terbaru.</p>
@@ -1032,9 +1041,11 @@ function Dashboard() {
                     setHistoryInterval("1");
                     setHistoryStartHour("ALL");
                     setHistoryEndHour("ALL");
+                    setHistoryStartHourDraft("ALL");
+                    setHistoryEndHourDraft("ALL");
                     setHistoryPage(1);
                   }}
-                  disabled={historyRangeMode === "absolute" && historyStartDate === todayDate && historyEndDate === todayDate && historyFilter === "ALL" && historyInterval === "1" && historyStartHour === "ALL" && historyEndHour === "ALL"}
+                  disabled={historyRangeMode === "absolute" && historyStartDate === todayDate && historyEndDate === todayDate && historyFilter === "ALL" && historyInterval === "1" && historyStartHour === "ALL" && historyEndHour === "ALL" && historyStartHourDraft === "ALL" && historyEndHourDraft === "ALL"}
                 >
                   Reset filter
                 </button>
@@ -1062,30 +1073,40 @@ function Dashboard() {
                   <option value="240">4 jam terakhir</option>
                   <option value="300">5 jam terakhir</option>
                 </select>
-                {historyRangeMode === "relative" ? <div className="history-filter-hint">
-                  <p className="muted">Rentang bergerak: rekaman dari {relativeMinutes === 30 ? "30 menit" : `${relativeMinutes / 60} jam`} terakhir sampai sekarang. Filter tanggal dan jam dinonaktifkan selama mode ini.</p>
-                  <button type="button" className="history-range-mode-button" onClick={() => setHistoryRangeMode("absolute")}>Gunakan tanggal dan jam</button>
-                </div> : Number(historyInterval) >= 30 && <p className="muted history-filter-hint">Tanggal/jam absolut aktif; semua titik mentah pada rentang yang dipilih ditampilkan.</p>}
+                {historyRangeMode === "relative" && <button type="button" className="history-range-mode-button" onClick={() => setHistoryRangeMode("absolute")}>Gunakan tanggal dan jam</button>}
                 <div className="history-hour-filters">
                   <div>
                     <label htmlFor="history-start-hour">Dari jam</label>
-                    <select id="history-start-hour" value={historyStartHour} disabled={historyRangeMode === "relative"} onChange={event => { setHistoryPage(1); setHistoryRangeMode("absolute"); setHistoryStartHour(event.target.value); }}>
+                    <select id="history-start-hour" value={historyStartHourDraft} disabled={historyRangeMode === "relative"} onChange={event => { setHistoryStartHourDraft(event.target.value); setHistoryRangeMode("absolute"); }}>
                       <option value="ALL">Semua jam</option>
-                      {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={String(hour)}>{String(hour).padStart(2, "0")}:00</option>)}
+                      {Array.from({ length: 48 }, (_, index) => {
+                        const hour = Math.floor(index / 2);
+                        const minute = index % 2 === 0 ? "00" : "30";
+                        const time = `${String(hour).padStart(2, "0")}:${minute}`;
+                        return <option key={time} value={time}>{time}</option>;
+                      })}
                     </select>
                   </div>
                   <div>
                     <label htmlFor="history-end-hour">Sampai jam</label>
-                    <select id="history-end-hour" value={historyEndHour} disabled={historyRangeMode === "relative"} onChange={event => { setHistoryPage(1); setHistoryRangeMode("absolute"); setHistoryEndHour(event.target.value); }}>
+                    <select id="history-end-hour" value={historyEndHourDraft} disabled={historyRangeMode === "relative"} onChange={event => { setHistoryEndHourDraft(event.target.value); setHistoryRangeMode("absolute"); }}>
                       <option value="ALL">Semua jam</option>
-                      {Array.from({ length: 24 }, (_, hour) => <option key={hour} value={String(hour)}>{String(hour).padStart(2, "0")}:00 (batas akhir)</option>)}
+                      {Array.from({ length: 48 }, (_, index) => {
+                        const hour = Math.floor(index / 2);
+                        const minute = index % 2 === 0 ? "00" : "30";
+                        const time = `${String(hour).padStart(2, "0")}:${minute}`;
+                        return <option key={time} value={time}>{time} (batas akhir)</option>;
+                      })}
                     </select>
                   </div>
                 </div>
-                {historyRangeMode !== "relative" && (historyStartHour !== "ALL" || historyEndHour !== "ALL") && <p className="muted history-filter-hint">
-                  Jam memakai waktu Asia/Jakarta. Batas mulai termasuk, batas akhir tidak termasuk (22:00–23:00 berarti hanya jam 22). Jika melewati tengah malam, misalnya 22:00–02:00, bagian setelah tengah malam dihitung pada hari berikutnya.
-                </p>}
-                <button type="button" className="history-apply-button" onClick={() => { setMobileFiltersOpen(false); setHistorySheetState("expanded"); }}>Terapkan filter</button>
+                <button type="button" className="history-apply-button" onClick={() => {
+                  setHistoryPage(1);
+                  setHistoryStartHour(historyStartHourDraft);
+                  setHistoryEndHour(historyEndHourDraft);
+                  setMobileFiltersOpen(false);
+                  setHistorySheetState("expanded");
+                }}>Terapkan filter</button>
                 </div>
                 {displayHistory.length > historyPageSize && <nav className="history-pagination" aria-label="Halaman riwayat lokasi">
                   <span>Menampilkan {(currentHistoryPage - 1) * historyPageSize + 1}-{Math.min(currentHistoryPage * historyPageSize, displayHistory.length)} dari {displayHistory.length} grup</span>
@@ -1184,18 +1205,23 @@ function Dashboard() {
             <button type="button" onClick={openMobileFilters}>Filter</button>
             <button type="button" onClick={() => setHistorySheetState(state => state === "collapsed" ? "peek" : "expanded")}>Riwayat</button>
           </div>
-          <div className="map-mode-control leaflet-control">
-            <label htmlFor="map-display-mode">Tampilan peta</label>
-            <select id="map-display-mode" value={mapMode} onChange={event => setMapMode(event.target.value)}>
-              <option value="route">Rute</option>
-              <option value="points">Titik</option>
-              <option value="raw">Inspeksi mentah</option>
-            </select>
-            <small>{mapMode === "route"
-              ? `Garis menghubungkan titik terbaik; jeda di atas ${routeGapMinutes} menit memulai segmen baru.`
-              : mapMode === "points"
-                ? "Menampilkan titik terbaik tanpa garis rute."
-                : "Menampilkan semua rekaman mentah sesuai filter, tanpa garis rute."}</small>
+          <div className="map-control-stack leaflet-control">
+            <div className="map-mode-control">
+              <label htmlFor="map-display-mode">Tampilan peta</label>
+              <select id="map-display-mode" value={mapMode} onChange={event => setMapMode(event.target.value)}>
+                <option value="route">Rute</option>
+                <option value="points">Titik</option>
+                <option value="raw">Inspeksi mentah</option>
+              </select>
+              <small>{mapMode === "route"
+                ? `Garis menghubungkan titik terbaik; jeda di atas ${routeGapMinutes} menit memulai segmen baru.`
+                : mapMode === "points"
+                  ? "Menampilkan titik terbaik tanpa garis rute."
+                  : "Menampilkan semua rekaman mentah sesuai filter, tanpa garis rute."}</small>
+            </div>
+            <button type="button" className={`map-refresh-button${refreshingData ? " is-refreshing" : ""}`} onClick={handleRefresh} disabled={refreshingData} aria-label="Refresh data tersimpan" title="Refresh data tersimpan">
+              <RefreshIcon />
+            </button>
           </div>
           <div ref={mapRef} className="map" />
         </section>

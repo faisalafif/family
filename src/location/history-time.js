@@ -42,16 +42,39 @@ export function jakartaHour(timestamp) {
   return hour == null ? null : Number(hour);
 }
 
+export function timeFilterMinutes(value) {
+  if (value == null || value === "ALL") return null;
+  const match = /^(\d{1,2})(?::(\d{2}))?$/.exec(String(value));
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = match[2] == null ? 0 : Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function jakartaMinuteOfDay(timestamp) {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: JAKARTA_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+  return Number(values.hour) * 60 + Number(values.minute);
+}
+
 export function isInJakartaHourRange(timestamp, startHour = "ALL", endHour = "ALL") {
-  const hour = jakartaHour(timestamp);
-  if (hour == null) return false;
-  const start = startHour === "ALL" ? null : Number(startHour);
-  const end = endHour === "ALL" ? null : Number(endHour);
+  const minuteOfDay = jakartaMinuteOfDay(timestamp);
+  if (minuteOfDay == null || !Number.isFinite(minuteOfDay)) return false;
+  const start = timeFilterMinutes(startHour);
+  const end = timeFilterMinutes(endHour);
   if (start == null && end == null) return true;
-  if (start == null) return hour < end;
-  if (end == null) return hour >= start;
+  if (start == null) return minuteOfDay < end;
+  if (end == null) return minuteOfDay >= start;
   if (start === end) return false;
-  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+  return start < end ? minuteOfDay >= start && minuteOfDay < end : minuteOfDay >= start || minuteOfDay < end;
 }
 
 
@@ -60,12 +83,13 @@ export function isInJakartaDateTimeRange(timestamp, startDate = "", endDate = ""
   if (!Number.isFinite(parsedTimestamp.getTime())) return false;
   const date = jakartaDateInputValue(parsedTimestamp);
   const isWithinDateRange = value => (!startDate || value >= startDate) && (!endDate || value <= endDate);
-  const start = startHour === "ALL" ? null : Number(startHour);
-  const end = endHour === "ALL" ? null : Number(endHour);
+  const start = timeFilterMinutes(startHour);
+  const end = timeFilterMinutes(endHour);
   if (start != null && end != null && start > end) {
-    const hour = jakartaHour(timestamp);
-    if (hour >= start) return isWithinDateRange(date);
-    if (hour < end) {
+    const minuteOfDay = jakartaMinuteOfDay(timestamp);
+    if (minuteOfDay == null) return false;
+    if (minuteOfDay >= start) return isWithinDateRange(date);
+    if (minuteOfDay < end) {
       const previousDate = new Date(0);
       const [year, month, day] = date.split("-").map(Number);
       previousDate.setUTCFullYear(year, month - 1, day - 1);
