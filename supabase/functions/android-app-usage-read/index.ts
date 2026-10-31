@@ -7,9 +7,6 @@ const isDate = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d
 Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin }) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") return json({ message: "Method not allowed." }, 405);
-  const expectedDashboardKey = Deno.env.get("ANDROID_USAGE_DASHBOARD_KEY");
-  if (!expectedDashboardKey) return json({ message: "App Usage History belum dikonfigurasi: set secret ANDROID_USAGE_DASHBOARD_KEY." }, 503);
-  if (request.headers.get("x-app-usage-dashboard-key") !== expectedDashboardKey) return json({ message: "Kunci dashboard App Usage History tidak valid." }, 401);
   const body = await parseBody(request);
   const { trackingToken, memberId, usageDate } = body ?? {};
   if (!isUuid(trackingToken) || !isUuid(memberId) || !isDate(usageDate)) return json({ message: "Permintaan riwayat aplikasi tidak valid." }, 400);
@@ -18,15 +15,20 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
   if (!member) return json({ message: "Akses ke perangkat ini tidak valid." }, 403);
 
   const { data: status, error: statusError } = await admin.from("android_app_usage_status")
-    .select("device_id,collection_enabled,usage_access_granted,collection_status,collected_at,reported_at")
+    .select("device_id,collection_enabled,usage_access_granted,collection_status,collected_at,reported_at,active_app_package,active_app_name,active_app_since")
     .eq("member_id", memberId).order("reported_at", { ascending: false }).limit(1).maybeSingle();
   if (statusError) return json({ message: "Status penggunaan aplikasi belum tersedia." }, 500);
-  if (!status) return json({ status: null, records: [] });
+  if (!status) return json({ status: null, records: [], sessions: [] });
 
   const { data: records, error } = await admin.from("android_app_usage_daily")
     .select("event_id,device_id,usage_date,package_name,app_name,usage_ms,last_used_at,synced_at")
     .eq("member_id", memberId).eq("device_id", status.device_id).eq("usage_date", usageDate)
     .order("usage_ms", { ascending: false }).limit(500);
   if (error) return json({ message: "Riwayat penggunaan aplikasi gagal dimuat." }, 500);
-  return json({ status, records: records ?? [] });
+  const { data: sessions, error: sessionsError } = await admin.from("android_app_usage_sessions")
+    .select("session_id,device_id,usage_date,package_name,app_name,started_at,ended_at,duration_ms,is_active,synced_at")
+    .eq("member_id", memberId).eq("device_id", status.device_id).eq("usage_date", usageDate)
+    .order("started_at", { ascending: false }).limit(1000);
+  if (sessionsError) return json({ message: "Riwayat sesi aplikasi gagal dimuat." }, 500);
+  return json({ status, records: records ?? [], sessions: sessions ?? [] });
 }));

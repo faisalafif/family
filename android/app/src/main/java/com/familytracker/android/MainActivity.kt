@@ -100,6 +100,9 @@ private fun FamilyTrackerApp() {
     var serviceRunning by remember { mutableStateOf(isLocationServiceRunning(context)) }
     var appUsageEnabled by remember { mutableStateOf(prefs.appUsageEnabled) }
     var hasUsageAccess by remember { mutableStateOf(AppUsageCollector.hasUsageAccess(context)) }
+    var appUsageSyncAt by remember { mutableStateOf(prefs.appUsageSyncAt) }
+    var appUsageSyncResult by remember { mutableStateOf(prefs.appUsageSyncResult) }
+    var appUsageSyncError by remember { mutableStateOf(prefs.appUsageSyncError) }
     var domainMonitorRunning by remember { mutableStateOf(prefs.domainMonitorRunning) }
     var waitingForVpnConsent by remember { mutableStateOf(false) }
 
@@ -111,6 +114,9 @@ private fun FamilyTrackerApp() {
             serviceRunning = isLocationServiceRunning(context)
             appUsageEnabled = prefs.appUsageEnabled
             hasUsageAccess = AppUsageCollector.hasUsageAccess(context)
+            appUsageSyncAt = prefs.appUsageSyncAt
+            appUsageSyncResult = prefs.appUsageSyncResult
+            appUsageSyncError = prefs.appUsageSyncError
             domainMonitorRunning = prefs.domainMonitorRunning
             if (prefs.memberId != null) AppUsageSync.schedule(context)
             screenRefresh++
@@ -198,7 +204,14 @@ private fun FamilyTrackerApp() {
     DisposableEffect(prefs) {
         val mainHandler = Handler(Looper.getMainLooper())
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key in setOf("protection_enabled", "protection_pause_sync_pending", "last_update", "last_accuracy", "last_status", "admin_message", "admin_message_sync_error", "domain_monitor_enabled", "domain_monitor_running", "domain_monitor_error")) mainHandler.post { screenRefresh++; serviceRunning = isLocationServiceRunning(context); domainMonitorRunning = prefs.domainMonitorRunning }
+            if (key in setOf("protection_enabled", "protection_pause_sync_pending", "last_update", "last_accuracy", "last_status", "admin_message", "admin_message_sync_error", "domain_monitor_enabled", "domain_monitor_running", "domain_monitor_error", "app_usage_sync_at", "app_usage_sync_result", "app_usage_sync_error")) mainHandler.post {
+                screenRefresh++
+                serviceRunning = isLocationServiceRunning(context)
+                domainMonitorRunning = prefs.domainMonitorRunning
+                appUsageSyncAt = prefs.appUsageSyncAt
+                appUsageSyncResult = prefs.appUsageSyncResult
+                appUsageSyncError = prefs.appUsageSyncError
+            }
         }
         prefs.addListener(listener)
         onDispose { prefs.removeListener(listener) }
@@ -214,8 +227,8 @@ private fun FamilyTrackerApp() {
                     .onSuccess { registration ->
                         name = registration.second
                         prefs.name = registration.second; prefs.phone = null; prefs.trackingToken = token; prefs.memberId = registration.first
-                        message = "Perangkat berhasil ditautkan. Izinkan akses yang diminta; perlindungan akan aktif otomatis."
-                        autoStartAfterLink = true
+                        message = "Perangkat berhasil ditautkan. Tekan tombol aktifkan untuk mulai berbagi lokasi dan App Usage."
+                        autoStartAfterLink = false
                     }
                     .onFailure { message = it.message ?: "Pendaftaran perangkat gagal." }
                 busy = false; screenRefresh++
@@ -225,7 +238,12 @@ private fun FamilyTrackerApp() {
 
     val startProtection: () -> Unit = {
         if (prefs.memberId == null) message = "Tautkan perangkat ke anggota keluarga lebih dulu."
-        else autoStartAfterLink = true
+        else {
+            prefs.appUsageEnabled = true
+            appUsageEnabled = true
+            AppUsageSync.schedule(context)
+            autoStartAfterLink = true
+        }
     }
 
     LaunchedEffect(autoStartAfterLink, hasFine, hasBackground, hasNotification, locationEnabled, prefs.memberId) {
@@ -306,6 +324,9 @@ private fun FamilyTrackerApp() {
                         Button(onClick = { if (serviceRunning) {
                             prefs.protectionPausedAtMillis = System.currentTimeMillis()
                             prefs.protectionEnabled = false
+                            prefs.appUsageEnabled = false
+                            appUsageEnabled = false
+                            AppUsageSync.requestNow(context)
                             prefs.protectionPauseSyncPending = true
                             prefs.lastStatus = "Perlindungan dijeda · status web menunggu sinkronisasi"
                             context.startService(Intent(context, LocationForegroundService::class.java).setAction(LocationForegroundService.ACTION_STOP))
@@ -314,7 +335,7 @@ private fun FamilyTrackerApp() {
                             message = "Perlindungan langsung dijeda di HP. Statusnya akan disinkronkan ke web saat internet tersedia."
                             screenRefresh++
                         } else startProtection() }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                            Text(if (serviceRunning) "Jeda perlindungan" else "Aktifkan perlindungan lokasi")
+                            Text(if (serviceRunning) "Jeda perlindungan" else "Aktifkan berbagi lokasi")
                         }
                         if (Build.VERSION.SDK_INT >= 29 && !hasBackground) {
                             OutlinedButton(onClick = {
@@ -334,20 +355,9 @@ private fun FamilyTrackerApp() {
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
                 ) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("Riwayat penggunaan aplikasi", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
-                        Text("Opsional. Jika diaktifkan, note mengirim nama aplikasi dan total durasi aplikasi tampil di depan ke dashboard. Pesan, notifikasi, isi layar, dan ketikan tidak dikumpulkan. Data GPS tetap berjalan terpisah.", color = Color(0xFF68778C), style = MaterialTheme.typography.bodySmall)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (appUsageEnabled) "Pencatatan aktif" else "Pencatatan nonaktif", color = Ink, fontWeight = FontWeight.SemiBold)
-                            Switch(checked = appUsageEnabled, onCheckedChange = { enabled ->
-                                prefs.appUsageEnabled = enabled
-                                appUsageEnabled = enabled
-                                AppUsageSync.requestNow(context)
-                                if (enabled && !hasUsageAccess) {
-                                    message = "Izinkan Usage Access secara manual di pengaturan Android untuk mulai mengumpulkan ringkasan penggunaan aplikasi."
-                                    context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-                                }
-                            })
-                        }
+                        Text("Riwayat", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Ink)
+                        Text("Mengikuti tombol perlindungan.", color = Color(0xFF68778C), style = MaterialTheme.typography.bodySmall)
+                        Text(if (appUsageEnabled) "Pencatatan aktif" else "Pencatatan nonaktif", color = Ink, fontWeight = FontWeight.SemiBold)
                         if (appUsageEnabled && !hasUsageAccess) {
                             Text("Usage Access belum diizinkan. Pengumpulan belum dimulai.", color = Color(0xFFB54708), style = MaterialTheme.typography.bodySmall)
                             OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }, modifier = Modifier.fillMaxWidth()) {
@@ -355,6 +365,11 @@ private fun FamilyTrackerApp() {
                             }
                         } else if (appUsageEnabled) {
                             Text("Usage Access diizinkan. Ringkasan diperbarui berkala dan tersimpan sementara saat offline.", color = Color(0xFF16834A), style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (appUsageSyncError.isNotBlank()) {
+                            Text("Sinkronisasi gagal: $appUsageSyncError", color = Color(0xFFB42318), style = MaterialTheme.typography.bodySmall)
+                        } else if (appUsageSyncAt.isNotBlank()) {
+                            Text("Sinkronisasi terakhir: $appUsageSyncAt", color = Color(0xFF68778C), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }

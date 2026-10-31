@@ -37,6 +37,22 @@ class LocationForegroundService : Service() {
     private lateinit var preferences: DevicePreferences
     private val messagePollHandler = Handler(Looper.getMainLooper())
     private var shouldPollMessages = false
+    private val usageSyncHandler = Handler(Looper.getMainLooper())
+    private val usageSync = object : Runnable {
+        override fun run() {
+            if (!::preferences.isInitialized || !preferences.protectionEnabled) return
+            if (preferences.appUsageEnabled && com.familytracker.android.data.AppUsageCollector.hasUsageAccess(this@LocationForegroundService)) {
+                scope.launch {
+                    try {
+                        com.familytracker.android.worker.AppUsageSync.syncNow(this@LocationForegroundService)
+                    } catch (error: Exception) {
+                        preferences.appUsageSyncError = error.message ?: "Sinkronisasi penggunaan aplikasi gagal."
+                    }
+                }
+            }
+            usageSyncHandler.postDelayed(this, APP_USAGE_SYNC_INTERVAL_MS)
+        }
+    }
     private val messagePoll = object : Runnable {
         override fun run() {
             if (!shouldPollMessages || !::preferences.isInitialized || !preferences.protectionEnabled) return
@@ -80,6 +96,7 @@ class LocationForegroundService : Service() {
         if (intent?.action == ACTION_STOP) {
             preferences.protectionEnabled = false
             shouldPollMessages = false
+            usageSyncHandler.removeCallbacks(usageSync)
             messagePollHandler.removeCallbacks(messagePoll)
             locationManager.stop(callback)
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -105,6 +122,8 @@ class LocationForegroundService : Service() {
         shouldPollMessages = true
         messagePollHandler.removeCallbacks(messagePoll)
         messagePollHandler.post(messagePoll)
+        usageSyncHandler.removeCallbacks(usageSync)
+        usageSyncHandler.post(usageSync)
         try {
             locationManager.start(callback)
             preferences.lastStatus = "Menunggu pembaruan lokasi…"
@@ -148,6 +167,7 @@ class LocationForegroundService : Service() {
     override fun onDestroy() {
         shouldPollMessages = false
         messagePollHandler.removeCallbacks(messagePoll)
+        usageSyncHandler.removeCallbacks(usageSync)
         if (::locationManager.isInitialized && ::callback.isInitialized) locationManager.stop(callback)
         scope.cancel()
         super.onDestroy()
@@ -168,5 +188,6 @@ class LocationForegroundService : Service() {
         private const val CHANNEL_ID = "location_protection"
         private const val NOTIFICATION_ID = 17
         private const val MESSAGE_POLL_INTERVAL_MS = 15_000L
+        private const val APP_USAGE_SYNC_INTERVAL_MS = 60_000L
     }
 }

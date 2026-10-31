@@ -19,3 +19,18 @@ data class AppUsageRecord(
     val lastUsedAt: String?,
     val syncedAt: String? = null
 )
+
+@Entity(tableName = "pending_app_usage_sessions", indices = [Index(value = ["deviceId", "usageDate", "startedAt"])])
+data class AppUsageSession(
+    @PrimaryKey val sessionId: String,
+    val memberId: String,
+    val deviceId: String,
+    val usageDate: String,
+    val packageName: String,
+    val appName: String,
+    val startedAt: String,
+    val endedAt: String?,
+    val durationMs: Long,
+    val isActive: Boolean,
+    val syncedAt: String? = null
+)

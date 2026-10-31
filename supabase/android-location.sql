@@ -81,6 +81,26 @@ create index if not exists android_app_usage_member_date_idx
 alter table public.android_app_usage_daily enable row level security;
 grant all on public.android_app_usage_daily to service_role;
 
+-- Per-foreground-session timeline; stable session_id values make active sessions update in place.
+create table if not exists public.android_app_usage_sessions (
+  session_id text primary key,
+  device_id uuid not null references public.android_devices(device_id) on delete cascade,
+  member_id uuid not null references public.family_members(id) on delete cascade,
+  usage_date date not null,
+  package_name text not null,
+  app_name text not null,
+  started_at timestamptz not null,
+  ended_at timestamptz,
+  duration_ms bigint not null check (duration_ms between 0 and 86400000),
+  is_active boolean not null default false,
+  synced_at timestamptz not null default now(),
+  check (ended_at is null or ended_at >= started_at)
+);
+create index if not exists android_app_usage_sessions_member_date_idx
+  on public.android_app_usage_sessions(member_id, usage_date desc, started_at desc);
+alter table public.android_app_usage_sessions enable row level security;
+grant all on public.android_app_usage_sessions to service_role;
+
 create table if not exists public.android_app_usage_status (
   device_id uuid primary key references public.android_devices(device_id) on delete cascade,
   member_id uuid not null references public.family_members(id) on delete cascade,
@@ -90,6 +110,9 @@ create table if not exists public.android_app_usage_status (
   collected_at timestamptz not null,
   reported_at timestamptz not null default now()
 );
+alter table public.android_app_usage_status add column if not exists active_app_package text;
+alter table public.android_app_usage_status add column if not exists active_app_name text;
+alter table public.android_app_usage_status add column if not exists active_app_since timestamptz;
 create index if not exists android_app_usage_status_member_idx
   on public.android_app_usage_status(member_id, reported_at desc);
 alter table public.android_app_usage_status enable row level security;

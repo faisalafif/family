@@ -104,16 +104,19 @@ function Dashboard() {
   const [deviceDiagnosticsError, setDeviceDiagnosticsError] = useState("");
   const [appUsageDate, setAppUsageDate] = useState(() => jakartaDateInputValue());
   const [appUsageRecords, setAppUsageRecords] = useState([]);
+  const [appUsageSessions, setAppUsageSessions] = useState([]);
+  const [appUsagePage, setAppUsagePage] = useState(1);
+  const [appUsageSearch, setAppUsageSearch] = useState("");
+  const [appUsageSessionPage, setAppUsageSessionPage] = useState(1);
   const [appUsageStatus, setAppUsageStatus] = useState(null);
   const [appUsageLoading, setAppUsageLoading] = useState(false);
   const [appUsageError, setAppUsageError] = useState("");
   const [expandedUsageEventId, setExpandedUsageEventId] = useState(null);
   const [domainMonitorRecords, setDomainMonitorRecords] = useState([]);
+  const [domainMonitorPage, setDomainMonitorPage] = useState(1);
   const [domainMonitorStatus, setDomainMonitorStatus] = useState(null);
   const [domainMonitorLoading, setDomainMonitorLoading] = useState(false);
   const [domainMonitorError, setDomainMonitorError] = useState("");
-  const [appUsageDashboardKey, setAppUsageDashboardKey] = useState(() => sessionStorage.getItem("app-usage-dashboard-key") || "");
-  const [appUsageDashboardKeyDraft, setAppUsageDashboardKeyDraft] = useState("");
   const [adminMessageDraft, setAdminMessageDraft] = useState("");
   const [sendingAdminMessage, setSendingAdminMessage] = useState(false);
   const [adminMessageNotice, setAdminMessageNotice] = useState("");
@@ -264,8 +267,9 @@ function Dashboard() {
 
   async function loadAppUsage(member = selected, date = appUsageDate) {
     const requestSequence = ++appUsageRequestSequenceRef.current;
-    if (!supabase || !member?.id || !member?.tracking_token || !appUsageDashboardKey) {
+    if (!supabase || !member?.id || !member?.tracking_token) {
       setAppUsageRecords([]);
+      setAppUsageSessions([]);
       setAppUsageStatus(null);
       setAppUsageError("");
       return;
@@ -273,12 +277,12 @@ function Dashboard() {
     setAppUsageLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke("android-app-usage-read", {
-        body: { trackingToken: member.tracking_token, memberId: member.id, usageDate: date },
-        headers: { "x-app-usage-dashboard-key": appUsageDashboardKey }
+        body: { trackingToken: member.tracking_token, memberId: member.id, usageDate: date }
       });
       if (error) throw error;
       if (requestSequence === appUsageRequestSequenceRef.current) {
         setAppUsageRecords(Array.isArray(data?.records) ? data.records : []);
+        setAppUsageSessions(Array.isArray(data?.sessions) ? data.sessions : []);
         setAppUsageStatus(data?.status || null);
         setAppUsageError("");
       }
@@ -286,6 +290,7 @@ function Dashboard() {
       if (requestSequence === appUsageRequestSequenceRef.current) {
         setAppUsageError(error.message || "Riwayat penggunaan aplikasi gagal dimuat.");
         setAppUsageRecords([]);
+        setAppUsageSessions([]);
         setAppUsageStatus(null);
       }
     } finally {
@@ -295,7 +300,7 @@ function Dashboard() {
 
   async function loadDomainMonitor(member = selected, date = appUsageDate) {
     const requestSequence = ++domainMonitorRequestSequenceRef.current;
-    if (!supabase || !member?.id || !member?.tracking_token || !appUsageDashboardKey) {
+    if (!supabase || !member?.id || !member?.tracking_token) {
       setDomainMonitorRecords([]);
       setDomainMonitorStatus(null);
       setDomainMonitorError("");
@@ -304,8 +309,7 @@ function Dashboard() {
     setDomainMonitorLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke("android-domain-read", {
-        body: { trackingToken: member.tracking_token, memberId: member.id, observationDate: date },
-        headers: { "x-app-usage-dashboard-key": appUsageDashboardKey }
+        body: { trackingToken: member.tracking_token, memberId: member.id, observationDate: date }
       });
       if (error) throw error;
       if (requestSequence === domainMonitorRequestSequenceRef.current) {
@@ -424,25 +428,30 @@ function Dashboard() {
 
   useEffect(() => {
     setExpandedUsageEventId(null);
+    setAppUsagePage(1);
+    setAppUsageSearch("");
+    setAppUsageSessionPage(1);
+    setDomainMonitorPage(1);
     loadAppUsage(selected, appUsageDate);
     loadDomainMonitor(selected, appUsageDate);
   }, [selected?.id, appUsageDate]);
 
   useEffect(() => {
-    if (appUsageDashboardKey) {
+    if (!selected?.id) return;
+    const refreshVisibleDashboard = () => {
+      if (document.visibilityState !== "visible") return;
       loadAppUsage(selected, appUsageDate);
       loadDomainMonitor(selected, appUsageDate);
-    }
-  }, [appUsageDashboardKey]);
-
-  useEffect(() => {
-    if (!selected?.id || !appUsageDashboardKey) return;
-    const timer = window.setInterval(() => {
-      loadAppUsage(selected, appUsageDate);
-      loadDomainMonitor(selected, appUsageDate);
-    }, 60_000);
-    return () => window.clearInterval(timer);
-  }, [selected?.id, appUsageDate, appUsageDashboardKey]);
+    };
+    const timer = window.setInterval(refreshVisibleDashboard, 30_000);
+    document.addEventListener("visibilitychange", refreshVisibleDashboard);
+    window.addEventListener("focus", refreshVisibleDashboard);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisibleDashboard);
+      window.removeEventListener("focus", refreshVisibleDashboard);
+    };
+  }, [selected?.id, appUsageDate]);
 
   useEffect(() => {
     if (!selected?.id) {
@@ -850,6 +859,11 @@ function Dashboard() {
     if (historyPage > pageCount) setHistoryPage(pageCount);
   }, [historyPage, pageCount]);
 
+  const filteredAppUsageRecords = appUsageRecords.filter(record =>
+    `${record.app_name || ""} ${record.package_name || ""}`.toLocaleLowerCase().includes(appUsageSearch.trim().toLocaleLowerCase())
+  );
+  const appUsagePageCount = Math.max(1, Math.ceil(filteredAppUsageRecords.length / 8));
+
   return (
     <div className="app">
       <header>
@@ -966,37 +980,60 @@ function Dashboard() {
                     <input type="date" value={appUsageDate} onChange={event => setAppUsageDate(event.target.value)} />
                   </label>
                 </div>
-                {!appUsageDashboardKey ? <div className="app-usage-key-entry"><p className="muted">Masukkan kunci dashboard yang diset sebagai secret Supabase untuk membuka data penggunaan aplikasi.</p><input type="password" value={appUsageDashboardKeyDraft} onChange={event => setAppUsageDashboardKeyDraft(event.target.value)} placeholder="Kunci dashboard" aria-label="Kunci dashboard App Usage History" /><button type="button" className="secondary" onClick={() => { const key = appUsageDashboardKeyDraft.trim(); if (!key) return; sessionStorage.setItem("app-usage-dashboard-key", key); setAppUsageDashboardKey(key); setAppUsageDashboardKeyDraft(""); }}>Buka App Usage History</button></div> : appUsageLoading ? <p className="muted">Memuat riwayat penggunaan…</p> : appUsageError ? <><p className="muted">{appUsageError}</p><input type="password" value={appUsageDashboardKeyDraft} onChange={event => setAppUsageDashboardKeyDraft(event.target.value)} placeholder="Masukkan kunci dashboard" aria-label="Kunci dashboard App Usage History" /><button type="button" className="secondary" onClick={() => { const key = appUsageDashboardKeyDraft.trim(); if (!key) return; sessionStorage.setItem("app-usage-dashboard-key", key); setAppUsageDashboardKey(key); setAppUsageDashboardKeyDraft(""); }}>Coba lagi</button></> : !appUsageStatus ? <p className="muted">Belum ada status penggunaan dari perangkat Android. Aktifkan pencatatan dan Usage Access di aplikasi note.</p> : appUsageStatus.collection_status === "DISABLED" ? <p className="muted">Pencatatan penggunaan aplikasi sedang nonaktif di Android.</p> : appUsageStatus.collection_status === "PERMISSION_REQUIRED" ? <p className="muted">Usage Access belum diizinkan oleh pemilik perangkat. Pengumpulan belum berjalan.</p> : appUsageRecords.length === 0 ? <p className="muted">Tidak ada ringkasan penggunaan untuk tanggal ini. Laporan perangkat terakhir: {new Date(appUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}.</p> : <>
-                  <p className="muted">Pembaruan: {new Date(appUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}. Durasi adalah total waktu aplikasi tampil di depan.</p>
+                {appUsageLoading ? <p className="muted">Memuat riwayat penggunaan…</p> : appUsageError ? <><p className="muted">{appUsageError}</p><button type="button" className="secondary" onClick={() => loadAppUsage(selected, appUsageDate)}>Coba lagi</button></> : !appUsageStatus ? <p className="muted">Belum ada status penggunaan dari perangkat Android. Aktifkan pencatatan dan Usage Access di aplikasi note.</p> : appUsageStatus.collection_status === "DISABLED" ? <p className="muted">Pencatatan penggunaan aplikasi sedang nonaktif di Android.</p> : appUsageStatus.collection_status === "PERMISSION_REQUIRED" ? <p className="muted">Usage Access belum diizinkan oleh pemilik perangkat. Pengumpulan belum berjalan.</p> : <>
+                  <p className="muted">Pembaruan: {new Date(appUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}. Durasi total hari ini dan riwayat tiap sesi ditampilkan terpisah.</p>
+                  {Date.now() - new Date(appUsageStatus.reported_at).getTime() > 120_000 && <p className="usage-stale-notice">Laporan Android sudah lebih dari 2 menit. Web belum menerima data baru; pastikan berbagi lokasi aktif dan perangkat terhubung internet.</p>}
+                  {appUsageStatus.active_app_name && Date.now() - new Date(appUsageStatus.reported_at).getTime() < 120_000 && <p className="usage-live-status"><span aria-hidden="true" /> Sedang digunakan: <b>{appUsageStatus.active_app_name}</b></p>}
+                  {appUsageRecords.length > 0 && <>
+                  <h4 className="app-usage-subtitle">Total penggunaan per aplikasi</h4>
+                  <input type="search" className="app-usage-search" value={appUsageSearch} placeholder="Cari nama aplikasi, misalnya Kalender" aria-label="Cari aplikasi" onChange={event => { setAppUsageSearch(event.target.value); setAppUsagePage(1); }} />
+                  {filteredAppUsageRecords.length === 0 ? <p className="muted">Tidak ada aplikasi yang cocok dengan pencarian.</p> : <>
                   <ul className="app-usage-list">
-                    {appUsageRecords.map(record => <li key={record.event_id}>
+                    {filteredAppUsageRecords.slice((appUsagePage - 1) * 8, appUsagePage * 8).map(record => <li key={record.event_id}>
                       <button type="button" className="app-usage-row" aria-expanded={expandedUsageEventId === record.event_id} onClick={() => setExpandedUsageEventId(current => current === record.event_id ? null : record.event_id)}>
                         <span className="app-usage-icon" aria-hidden="true">{(record.app_name || record.package_name || "?").slice(0, 1).toUpperCase()}</span>
-                        <span className="app-usage-name"><strong>{record.app_name}</strong><small>{record.package_name}</small></span>
+                        <span className="app-usage-name"><strong>{record.app_name || record.package_name}</strong></span>
                         <span className="app-usage-total">{formatUsageDuration(record.usage_ms)}</span>
                       </button>
                       {expandedUsageEventId === record.event_id && <div className="app-usage-details">
                         <p><b>Waktu penggunaan:</b> total {formatUsageDuration(record.usage_ms)}</p>
                         <p><b>Terakhir digunakan:</b> {record.last_used_at ? new Date(record.last_used_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" }) : "Tidak tersedia"}</p>
-                        <p>Android menyediakan agregat durasi untuk hari ini, bukan rangkaian waktu mulai dan selesai yang selalu lengkap.</p>
+                        <p><b>Package:</b> {record.package_name}</p>
                         <p>Riwayat domain untuk aplikasi ini tidak tersedia dari Usage Access.</p>
                       </div>}
                     </li>)}
                   </ul>
+                  {filteredAppUsageRecords.length > 8 && <div className="usage-pagination"><button type="button" className="secondary" disabled={appUsagePage <= 1} onClick={() => setAppUsagePage(page => page - 1)}>Sebelumnya</button><span>Halaman {appUsagePage} dari {appUsagePageCount}</span><button type="button" className="secondary" disabled={appUsagePage >= appUsagePageCount} onClick={() => setAppUsagePage(page => page + 1)}>Berikutnya</button></div>}
+                  </>}
+                  </>}
+                  <h4 className="app-usage-subtitle">Riwayat sesi berdasarkan jam</h4>
+                  {appUsageSessions.length === 0 ? <p className="muted">Belum ada sesi tercatat untuk tanggal ini.</p> : <>
+                    <ul className="app-usage-list">{appUsageSessions.slice((appUsageSessionPage - 1) * 10, appUsageSessionPage * 10).map(session => {
+                      const live = Boolean(session.is_active && appUsageStatus.active_app_package === session.package_name && Date.now() - new Date(appUsageStatus.reported_at).getTime() < 120_000);
+                      const endLabel = session.ended_at ? new Date(session.ended_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" }) : live ? "Sedang digunakan" : "Belum ada waktu selesai";
+                      return <li className="usage-session-row" key={session.session_id}><span className="app-usage-icon" aria-hidden="true">{(session.app_name || "?").slice(0, 1).toUpperCase()}</span><span className="app-usage-name"><strong>{session.app_name || session.package_name}{live && <em className="usage-live-tag">Aktif</em>}</strong><small>{new Date(session.started_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })} – {endLabel}</small></span><span className="app-usage-total">{formatUsageDuration(session.duration_ms)}</span></li>;
+                    })}</ul>
+                    {appUsageSessions.length > 10 && <div className="usage-pagination"><button type="button" className="secondary" disabled={appUsageSessionPage <= 1} onClick={() => setAppUsageSessionPage(page => page - 1)}>Sebelumnya</button><span>Halaman {appUsageSessionPage} dari {Math.ceil(appUsageSessions.length / 10)}</span><button type="button" className="secondary" disabled={appUsageSessionPage >= Math.ceil(appUsageSessions.length / 10)} onClick={() => setAppUsageSessionPage(page => page + 1)}>Berikutnya</button></div>}
+                  </>}
+                  {appUsageRecords.length === 0 && appUsageSessions.length === 0 && <p className="muted">Belum ada penggunaan aplikasi untuk tanggal ini. Laporan perangkat terakhir: {new Date(appUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}.</p>}
                 </>}
-                {appUsageStatus?.collection_status === "INCOMPLETE" && <p className="muted">Laporan Android tidak lengkap; hanya agregat yang berhasil dibaca yang ditampilkan.</p>}
+                {appUsageStatus?.collection_status === "INCOMPLETE" && <p className="muted">Sebagian riwayat tidak berhasil dibaca oleh Android. Data yang tersedia tetap ditampilkan.</p>}
               </section>
 
               <section className="web-safety-section" aria-labelledby="web-safety-title">
                 <h3 id="web-safety-title">Web Safety Monitor</h3>
-                {domainMonitorError ? <p className="muted">Gagal memuat domain: {domainMonitorError}</p> : domainMonitorLoading ? <p className="muted">Memuat domain teramati…</p> : !appUsageDashboardKey ? <p className="muted">Gunakan kunci dashboard yang sama dengan App Usage History untuk membaca domain teramati.</p> : !domainMonitorStatus ? <p className="muted">Belum ada laporan monitor domain dari Android. Aktifkan Web Safety Monitor di aplikasi note dan setujui permintaan VPN Android.</p> : <>
+                {domainMonitorError ? <><p className="muted">Gagal memuat domain: {domainMonitorError}</p><button type="button" className="secondary" onClick={() => loadDomainMonitor(selected, appUsageDate)}>Coba lagi</button></> : domainMonitorLoading ? <p className="muted">Memuat domain teramati…</p> : !domainMonitorStatus ? <p className="muted">Belum ada laporan monitor domain dari Android. Aktifkan Web Safety Monitor di aplikasi note dan setujui permintaan VPN Android.</p> : <>
                   <p className="muted">Status perangkat: {domainMonitorStatus.monitoring_enabled && domainMonitorStatus.vpn_permission_granted ? "Pemantauan aktif" : "Pemantauan nonaktif"}. Laporan: {new Date(domainMonitorStatus.reported_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}.</p>
-                  {domainMonitorRecords.length === 0 ? <p className="muted">Belum ada domain DNS yang tercatat untuk tanggal ini.</p> : <ul className="domain-observation-list">
-                    {domainMonitorRecords.map(record => <li className="domain-observation-row" key={record.event_id}>
+                  {domainMonitorRecords.length === 0 ? <p className="muted">Belum ada domain DNS yang tercatat untuk tanggal ini.</p> : <>
+                  <p className="muted">Menampilkan {Math.min((domainMonitorPage - 1) * 20 + 1, domainMonitorRecords.length)}–{Math.min(domainMonitorPage * 20, domainMonitorRecords.length)} dari {domainMonitorRecords.length} domain</p>
+                  <ul className="domain-observation-list">
+                    {domainMonitorRecords.slice((domainMonitorPage - 1) * 20, domainMonitorPage * 20).map(record => <li className="domain-observation-row" key={record.event_id}>
                       <div><strong>{record.domain}</strong><span>{record.query_count} query · {new Date(record.first_seen_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}–{new Date(record.last_seen_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta" })}</span></div>
                       <small>Belum diperiksa terhadap sumber reputasi/phishing.</small>
                     </li>)}
-                  </ul>}
+                  </ul>
+                  {domainMonitorRecords.length > 20 && <div className="usage-pagination"><button type="button" className="secondary" disabled={domainMonitorPage <= 1} onClick={() => setDomainMonitorPage(page => page - 1)}>Sebelumnya</button><span>Halaman {domainMonitorPage} dari {Math.ceil(domainMonitorRecords.length / 20)}</span><button type="button" className="secondary" disabled={domainMonitorPage >= Math.ceil(domainMonitorRecords.length / 20)} onClick={() => setDomainMonitorPage(page => page + 1)}>Berikutnya</button></div>}
+                  </>}
                   <p className="muted">Ini adalah nama domain yang terlihat pada DNS, bukan bukti halaman dibuka. URL lengkap, isi halaman, dan aplikasi sumber tidak tersedia. DNS terenkripsi dapat membuat sebagian domain tidak terlihat.</p>
                 </>}
               </section>

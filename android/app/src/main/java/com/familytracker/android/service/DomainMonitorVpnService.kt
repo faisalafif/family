@@ -8,6 +8,8 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
@@ -41,6 +43,14 @@ class DomainMonitorVpnService : VpnService() {
     @Volatile private var running = false
     private var tunnel: ParcelFileDescriptor? = null
     private var readerThread: Thread? = null
+    private val syncHandler = Handler(Looper.getMainLooper())
+    private val syncRequest = object : Runnable {
+        override fun run() {
+            if (!running) return
+            DomainMonitorSync.requestNow(this@DomainMonitorVpnService)
+            syncHandler.postDelayed(this, DOMAIN_SYNC_INTERVAL_MS)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -94,6 +104,8 @@ class DomainMonitorVpnService : VpnService() {
             preferences.domainMonitorError = ""
             DomainMonitorSync.schedule(this)
             DomainMonitorSync.requestNow(this)
+            syncHandler.removeCallbacks(syncRequest)
+            syncHandler.postDelayed(syncRequest, DOMAIN_SYNC_INTERVAL_MS)
             readerThread = Thread({ readDnsPackets(tunnel!!, upstreamDns) }, "domain-dns-monitor").apply { start() }
         } catch (error: Exception) {
             preferences.domainMonitorRunning = false
@@ -151,6 +163,7 @@ class DomainMonitorVpnService : VpnService() {
 
     private fun stopMonitor() {
         running = false
+        syncHandler.removeCallbacks(syncRequest)
         preferences.domainMonitorEnabled = false
         preferences.domainMonitorRunning = false
         readerThread?.interrupt()
@@ -170,6 +183,7 @@ class DomainMonitorVpnService : VpnService() {
 
     override fun onDestroy() {
         running = false
+        syncHandler.removeCallbacks(syncRequest)
         preferences.domainMonitorRunning = false
         runCatching { tunnel?.close() }
         tunnel = null
@@ -218,6 +232,7 @@ class DomainMonitorVpnService : VpnService() {
         private const val DNS_PORT = 53
         private const val DNS_TIMEOUT_MS = 3500
         private const val MAX_DNS_PACKET_SIZE = 4096
+        private const val DOMAIN_SYNC_INTERVAL_MS = 60_000L
     }
 }
 

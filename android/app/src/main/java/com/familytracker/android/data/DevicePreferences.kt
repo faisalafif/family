@@ -34,6 +34,15 @@ class DevicePreferences(context: Context) {
     var appUsageEnabled: Boolean
         get() = prefs.getBoolean("app_usage_enabled", false)
         set(value) { prefs.edit().putBoolean("app_usage_enabled", value).apply() }
+    var appUsageSyncAt: String
+        get() = prefs.getString("app_usage_sync_at", "").orEmpty()
+        set(value) { prefs.edit().putString("app_usage_sync_at", value).apply() }
+    var appUsageSyncResult: String
+        get() = prefs.getString("app_usage_sync_result", "").orEmpty()
+        set(value) { prefs.edit().putString("app_usage_sync_result", value).apply() }
+    var appUsageSyncError: String
+        get() = prefs.getString("app_usage_sync_error", "").orEmpty()
+        set(value) { prefs.edit().putString("app_usage_sync_error", value).apply() }
     var domainMonitorEnabled: Boolean
         get() = prefs.getBoolean("domain_monitor_enabled", false)
         set(value) { prefs.edit().putBoolean("domain_monitor_enabled", value).apply() }

@@ -21,4 +21,19 @@ interface AppUsageDao {
 
     @Query("DELETE FROM pending_app_usage WHERE usageDate < :cutoffDate")
     suspend fun deleteBefore(cutoffDate: String)
+
+    @Query("SELECT * FROM pending_app_usage_sessions WHERE deviceId = :deviceId AND syncedAt IS NULL ORDER BY startedAt ASC")
+    suspend fun pendingSessions(deviceId: String): List<AppUsageSession>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSession(session: AppUsageSession)
+
+    @Query("SELECT * FROM pending_app_usage_sessions WHERE sessionId = :sessionId LIMIT 1")
+    suspend fun findSession(sessionId: String): AppUsageSession?
+
+    @Query("UPDATE pending_app_usage_sessions SET syncedAt = :syncedAt WHERE sessionId = :sessionId")
+    suspend fun markSessionSynced(sessionId: String, syncedAt: String)
+
+    @Query("DELETE FROM pending_app_usage_sessions WHERE usageDate < :cutoffDate")
+    suspend fun deleteSessionsBefore(cutoffDate: String)
 }

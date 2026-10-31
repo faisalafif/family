@@ -66,7 +66,11 @@ class FunctionsRepository {
         usageAccessGranted: Boolean,
         collectionIncomplete: Boolean,
         collectedAt: String,
-        records: List<AppUsageRecord>
+        records: List<AppUsageRecord>,
+        sessions: List<AppUsageSession>,
+        activeAppPackage: String?,
+        activeAppName: String?,
+        activeAppSince: String?
     ): JSONObject = withContext(Dispatchers.IO) {
         val payloadRecords = JSONArray()
         records.forEach { record ->
@@ -78,6 +82,14 @@ class FunctionsRepository {
                 .put("usageMs", record.usageMs)
                 .put("lastUsedAt", record.lastUsedAt ?: JSONObject.NULL))
         }
+        val payloadSessions = JSONArray()
+        sessions.forEach { session ->
+            payloadSessions.put(JSONObject().put("sessionId", session.sessionId)
+                .put("usageDate", session.usageDate).put("packageName", session.packageName)
+                .put("appName", session.appName).put("startedAt", session.startedAt)
+                .put("endedAt", session.endedAt ?: JSONObject.NULL).put("durationMs", session.durationMs)
+                .put("isActive", session.isActive))
+        }
         call("android-app-usage-ingest", JSONObject()
             .put("trackingToken", trackingToken)
             .put("memberId", memberId)
@@ -86,7 +98,11 @@ class FunctionsRepository {
             .put("usageAccessGranted", usageAccessGranted)
             .put("collectionIncomplete", collectionIncomplete)
             .put("collectedAt", collectedAt)
-            .put("records", payloadRecords))
+            .put("records", payloadRecords)
+            .put("sessions", payloadSessions)
+            .put("activeAppPackage", activeAppPackage ?: JSONObject.NULL)
+            .put("activeAppName", activeAppName ?: JSONObject.NULL)
+            .put("activeAppSince", activeAppSince ?: JSONObject.NULL))
     }
 
     suspend fun syncDomains(

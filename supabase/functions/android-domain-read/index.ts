@@ -7,10 +7,6 @@ const isDate = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d
 Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin }) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") return json({ message: "Method not allowed." }, 405);
-  const expectedDashboardKey = Deno.env.get("ANDROID_USAGE_DASHBOARD_KEY");
-  if (!expectedDashboardKey) return json({ message: "Web Safety Monitor belum dikonfigurasi: dashboard key Supabase tidak ditemukan." }, 503);
-  if (request.headers.get("x-app-usage-dashboard-key") !== expectedDashboardKey) return json({ message: "Kunci dashboard tidak valid." }, 401);
-
   const body = await parseBody(request);
   const { trackingToken, memberId, observationDate } = body ?? {};
   if (!isUuid(trackingToken) || !isUuid(memberId) || !isDate(observationDate)) return json({ message: "Permintaan riwayat domain tidak valid." }, 400);
