@@ -19,6 +19,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -40,7 +41,7 @@ object AppUsageSync {
     fun requestNow(context: Context) {
         WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
             IMMEDIATE_WORK,
-            ExistingWorkPolicy.REPLACE,
+            ExistingWorkPolicy.KEEP,
             OneTimeWorkRequestBuilder<AppUsageSyncWorker>().build()
         )
     }
@@ -107,6 +108,7 @@ object AppUsageSync {
             preferences.appUsageSyncError = ""
             ListenableWorker.Result.success()
         } catch (error: Exception) {
+            if (error is CancellationException) throw error
             preferences.appUsageSyncError = error.message ?: "Sinkronisasi gagal."
             ListenableWorker.Result.retry()
         }

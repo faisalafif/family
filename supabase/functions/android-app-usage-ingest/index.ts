@@ -16,34 +16,46 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
   const activeSince = body?.activeAppSince;
   const collectedAt = String(body?.collectedAt ?? "");
   const collectedAtMs = Date.parse(collectedAt);
-  if (![trackingToken, memberId, deviceId].every(isUuid) ||
-      typeof body?.collectionEnabled !== "boolean" || typeof body?.usageAccessGranted !== "boolean" ||
-      typeof body?.collectionIncomplete !== "boolean" ||
-      !Number.isFinite(collectedAtMs) || collectedAtMs > Date.now() + 300_000 ||
-      !Array.isArray(records) || records.length > 2000 || !Array.isArray(sessions) || sessions.length > 2000 ||
-      records.some((row: Record<string, unknown>) => {
-        if (!row || typeof row !== "object" || !isDate(row.usageDate) ||
-            typeof row.packageName !== "string" || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(row.packageName) ||
-            typeof row.appName !== "string" || !row.appName.trim() || row.appName.length > 200 ||
-            !Number.isInteger(Number(row.usageMs)) || Number(row.usageMs) < 0 || Number(row.usageMs) > 86_400_000 ||
-            (row.lastUsedAt != null && (!Number.isFinite(Date.parse(String(row.lastUsedAt))) || Date.parse(String(row.lastUsedAt)) > Date.now() + 300_000))) return true;
-        return row.eventId !== `${deviceId}:${row.usageDate}:${row.packageName}`;
-      }) ||
-      ((!body.collectionEnabled || !body.usageAccessGranted) && records.length > 0) ||
-      sessions.some((row: Record<string, unknown>) => !row || typeof row !== "object" ||
-        typeof row.sessionId !== "string" || row.sessionId.length > 300 ||
-        !isDate(row.usageDate) || typeof row.packageName !== "string" || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(row.packageName) ||
-        typeof row.appName !== "string" || !row.appName.trim() || row.appName.length > 200 ||
-        !Number.isFinite(Date.parse(String(row.startedAt))) || Date.parse(String(row.startedAt)) > Date.now() + 300_000 ||
-        (row.endedAt != null && (!Number.isFinite(Date.parse(String(row.endedAt))) || Date.parse(String(row.endedAt)) < Date.parse(String(row.startedAt)))) ||
-        !Number.isInteger(Number(row.durationMs)) || Number(row.durationMs) < 0 || Number(row.durationMs) > 86_400_000 || typeof row.isActive !== "boolean" ||
-        (row.isActive && row.endedAt != null)) ||
-      (activePackage != null && (typeof activePackage !== "string" || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(activePackage) || typeof activeName !== "string" || !activeName.trim())) ||
-      (activeSince != null && (!Number.isFinite(Date.parse(String(activeSince))) || Date.parse(String(activeSince)) > Date.now() + 300_000)) ||
-      ((!body.collectionEnabled || !body.usageAccessGranted) && (records.length > 0 || sessions.length > 0 || activePackage != null)) ||
-      (body.collectionIncomplete && (!body.collectionEnabled || !body.usageAccessGranted))) {
-    return json({ message: "Laporan penggunaan aplikasi tidak valid." }, 400);
+  const invalid = (reason: string) => {
+    console.warn("android-app-usage-ingest rejected payload", {
+      reason,
+      recordCount: Array.isArray(records) ? records.length : null,
+      sessionCount: Array.isArray(sessions) ? sessions.length : null,
+    });
+    return json({ message: `Laporan penggunaan aplikasi tidak valid: ${reason}.`, code: reason }, 400);
+  };
+  if (![trackingToken, memberId, deviceId].every(isUuid)) return invalid("ID_PERANGKAT_ATAU_ANGGOTA_TIDAK_VALID");
+  if (typeof body?.collectionEnabled !== "boolean" || typeof body?.usageAccessGranted !== "boolean" || typeof body?.collectionIncomplete !== "boolean") {
+    return invalid("STATUS_PENGUMPULAN_TIDAK_VALID");
   }
+  if (!Number.isFinite(collectedAtMs) || collectedAtMs > Date.now() + 300_000) return invalid("WAKTU_PENGUMPULAN_TIDAK_VALID");
+  if (!Array.isArray(records) || records.length > 2000) return invalid("JUMLAH_RIWAYAT_APLIKASI_TIDAK_VALID");
+  if (!Array.isArray(sessions) || sessions.length > 2000) return invalid("JUMLAH_SESI_APLIKASI_TIDAK_VALID");
+  const recordIndex = records.findIndex((row: Record<string, unknown>) => {
+    if (!row || typeof row !== "object" || !isDate(row.usageDate) ||
+        typeof row.packageName !== "string" || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(row.packageName) ||
+        typeof row.appName !== "string" || !row.appName.trim() || row.appName.length > 200 ||
+        !Number.isInteger(Number(row.usageMs)) || Number(row.usageMs) < 0 || Number(row.usageMs) > 86_400_000 ||
+        (row.lastUsedAt != null && (!Number.isFinite(Date.parse(String(row.lastUsedAt))) || Date.parse(String(row.lastUsedAt)) > Date.now() + 300_000))) return true;
+    return row.eventId !== `${deviceId}:${row.usageDate}:${row.packageName}`;
+  });
+  if (recordIndex >= 0) return invalid(`RIWAYAT_APLIKASI_KE_${recordIndex + 1}_TIDAK_VALID`);
+  if ((!body.collectionEnabled || !body.usageAccessGranted) && records.length > 0) return invalid("RIWAYAT_TERKIRIM_SAAT_PENGUMPULAN_NONAKTIF");
+  const sessionIndex = sessions.findIndex((row: Record<string, unknown>) => !row || typeof row !== "object" ||
+    typeof row.sessionId !== "string" || row.sessionId.length > 300 ||
+    !isDate(row.usageDate) || typeof row.packageName !== "string" || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(row.packageName) ||
+    typeof row.appName !== "string" || !row.appName.trim() || row.appName.length > 200 ||
+    !Number.isFinite(Date.parse(String(row.startedAt))) || Date.parse(String(row.startedAt)) > Date.now() + 300_000 ||
+    (row.endedAt != null && (!Number.isFinite(Date.parse(String(row.endedAt))) || Date.parse(String(row.endedAt)) < Date.parse(String(row.startedAt)))) ||
+    !Number.isInteger(Number(row.durationMs)) || Number(row.durationMs) < 0 || Number(row.durationMs) > 86_400_000 || typeof row.isActive !== "boolean" ||
+    (row.isActive && row.endedAt != null));
+  if (sessionIndex >= 0) return invalid(`SESI_APLIKASI_KE_${sessionIndex + 1}_TIDAK_VALID`);
+  if (activePackage != null && (typeof activePackage !== "string" || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(activePackage) || typeof activeName !== "string" || !activeName.trim())) {
+    return invalid("APLIKASI_AKTIF_TIDAK_VALID");
+  }
+  if (activeSince != null && (!Number.isFinite(Date.parse(String(activeSince))) || Date.parse(String(activeSince)) > Date.now() + 300_000)) return invalid("WAKTU_APLIKASI_AKTIF_TIDAK_VALID");
+  if ((!body.collectionEnabled || !body.usageAccessGranted) && (sessions.length > 0 || activePackage != null)) return invalid("SESI_TERKIRIM_SAAT_PENGUMPULAN_NONAKTIF");
+  if (body.collectionIncomplete && (!body.collectionEnabled || !body.usageAccessGranted)) return invalid("STATUS_DATA_TIDAK_KONSISTEN");
 
   const { data: member } = await admin.from("family_members").select("id")
     .eq("id", memberId).eq("tracking_token", trackingToken).maybeSingle();

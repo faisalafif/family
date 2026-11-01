@@ -98,6 +98,9 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .history-raw-records { display: grid; gap: 6px; padding: 0 10px 10px; }
 .history-raw-record { display: grid; gap: 3px; padding: 8px; border-radius: 7px; background: white; font-size: 11px; overflow-wrap: anywhere; }
 .history-raw-record small { color: #667085; }
+.member-detail-tabs { position: sticky; top: 0; z-index: 20; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 8px 0; margin: 0 0 12px; background: white; }
+.member-detail-tab { min-height: 40px; padding: 8px 6px; border: 1px solid #d0d5dd; border-radius: 9px; background: #fff; color: #475467; font-size: 12px; font-weight: 650; }
+.member-detail-tab.active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
 .history-pagination { display: grid; gap: 8px; margin: 10px 0; color: #667085; font-size: 12px; }
 .history-pagination > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .history-pagination button { padding: 7px 9px; border: 1px solid #d0d5dd; border-radius: 7px; background: white; color: #344054; }
@@ -161,11 +164,14 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
   .history-sheet-selected { max-width: 100%; overflow: hidden; color: #667085; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
   .sidebar-content { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; padding: 0 14px 14px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
   .sidebar-content > .member-detail-card { order: -1; display: flex; flex-direction: column; }
+  .member-detail-card > h2 { order: -3; }
+  .member-detail-card > .member-detail-tabs { order: -2; }
   .sidebar.history-sheet.sheet-collapsed .sidebar-content { visibility: hidden; pointer-events: none; }
   .sidebar.history-sheet.sheet-peek .sidebar-content > .card:first-child,
   .sidebar.history-sheet.sheet-peek .sidebar-content > .card:nth-child(2) { display: none; }
   .sidebar.history-sheet.sheet-peek .member-detail-card { padding: 0; border: 0; box-shadow: none; }
   .sidebar.history-sheet.sheet-peek .member-detail-card > :not(.history-block) { display: none !important; }
+  .sidebar.history-sheet.sheet-peek .member-detail-card > .member-detail-tabs { display: grid !important; }
   .member-detail-card > .history-block { order: -1; }
   .history-block { margin-top: 0; border-top: 0; padding-top: 0; }
   .history-block h3 { margin: 0 0 6px; }

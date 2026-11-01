@@ -96,6 +96,7 @@ function ConfigError() {
 function Dashboard() {
   const [members, setMembers] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [memberDetailTab, setMemberDetailTab] = useState("location");
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -908,7 +909,7 @@ function Dashboard() {
               <button
                 className={`member ${selected?.id === m.id ? "active" : ""}`}
                 key={m.id}
-                onClick={() => { setHistoryPage(1); setSelectedHistoryId(null); setSelectedHistoryRecordId(null); setSelectedRawRecordId(null); setHistoryPopupOpen(false); historyPopupSelectionKeyRef.current = null; setHistorySelectionNotice(""); setSelected(m); setHistorySheetState("peek"); }}
+                onClick={() => { setHistoryPage(1); setSelectedHistoryId(null); setSelectedHistoryRecordId(null); setSelectedRawRecordId(null); setHistoryPopupOpen(false); historyPopupSelectionKeyRef.current = null; setHistorySelectionNotice(""); setSelected(m); setMemberDetailTab("location"); setHistorySheetState("peek"); }}
               >
                 <span className="dot" />
                 <span>
@@ -922,6 +923,26 @@ function Dashboard() {
           {selected && (
             <section className="card member-detail-card">
               <h2>{selected.name}</h2>
+              <nav className="member-detail-tabs" role="tablist" aria-label="Informasi anggota">
+                {[
+                  ["location", "Lokasi"],
+                  ["appUsage", "App Usage"],
+                  ["webSafety", "Web Safety"]
+                ].map(([tab, label]) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    aria-selected={memberDetailTab === tab}
+                    className={`member-detail-tab${memberDetailTab === tab ? " active" : ""}`}
+                    onClick={() => {
+                      setMemberDetailTab(tab);
+                      if (window.matchMedia("(max-width: 800px)").matches) setHistorySheetState("expanded");
+                    }}
+                  >{label}</button>
+                ))}
+              </nav>
+              {memberDetailTab === "location" && <>
               <p><b>Last location:</b><br/>
                 {selected.latitude != null
                   ? `${selected.latitude.toFixed(6)}, ${selected.longitude.toFixed(6)}`
@@ -969,7 +990,9 @@ function Dashboard() {
                   <p><b>Antrean upload lokal:</b> {deviceDiagnostics.queued_uploads} dari 500</p>
                 </>}
               </div>
+              </>}
 
+              {memberDetailTab === "appUsage" && <>
               <section className="app-usage-section" aria-labelledby="app-usage-title">
                 <div className="app-usage-heading">
                   <div>
@@ -1019,7 +1042,9 @@ function Dashboard() {
                 </>}
                 {appUsageStatus?.collection_status === "INCOMPLETE" && <p className="muted">Sebagian riwayat tidak berhasil dibaca oleh Android. Data yang tersedia tetap ditampilkan.</p>}
               </section>
+              </>}
 
+              {memberDetailTab === "webSafety" && <>
               <section className="web-safety-section" aria-labelledby="web-safety-title">
                 <h3 id="web-safety-title">Web Safety Monitor</h3>
                 {domainMonitorError ? <><p className="muted">Gagal memuat domain: {domainMonitorError}</p><button type="button" className="secondary" onClick={() => loadDomainMonitor(selected, appUsageDate)}>Coba lagi</button></> : domainMonitorLoading ? <p className="muted">Memuat domain teramati…</p> : !domainMonitorStatus ? <p className="muted">Belum ada laporan monitor domain dari Android. Aktifkan Web Safety Monitor di aplikasi note dan setujui permintaan VPN Android.</p> : <>
@@ -1037,15 +1062,17 @@ function Dashboard() {
                   <p className="muted">Ini adalah nama domain yang terlihat pada DNS, bukan bukti halaman dibuka. URL lengkap, isi halaman, dan aplikasi sumber tidak tersedia. DNS terenkripsi dapat membuat sebagian domain tidak terlihat.</p>
                 </>}
               </section>
+              </>}
 
+              {memberDetailTab === "location" && <>
               {["mock", "orange-playground"].includes(locationProviderName) && (
                 <button type="button" className="icon-button" onClick={requestLatestLocation} disabled={requestingLocation}>
                   <RefreshIcon />
                   <span>{requestingLocation ? "Meminta lokasi..." : "Get Latest Location"}</span>
                 </button>
               )}
-              <p className="muted provider-status"><b>Location provider:</b> {getProviderStatus(locationProviderName)}</p>
-              {!["mock", "orange-playground"].includes(locationProviderName) && <p className="provider-message">Dashboard menerima lokasi yang sudah dikirim oleh Browser Tracker atau aplikasi Android saat perlindungan aktif. Tombol refresh hanya memuat ulang data tersimpan.</p>}
+              {/* <p className="muted provider-status"><b>Location provider:</b> {getProviderStatus(locationProviderName)}</p> */}
+              {/* {!["mock", "orange-playground"].includes(locationProviderName) && <p className="provider-message">Dashboard menerima lokasi yang sudah dikirim oleh Browser Tracker atau aplikasi Android saat perlindungan aktif. Tombol refresh hanya memuat ulang data tersimpan.</p>} */}
               {providerMessage && <p className="provider-message" role="status">{providerMessage}</p>}
               <div className="history-block">
                 <h3>Location history</h3>
@@ -1220,6 +1247,7 @@ function Dashboard() {
                   </div>
                 ))}
               </div>
+              </>}
 
               {trackingUrl && (
                 <>
