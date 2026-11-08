@@ -24,6 +24,7 @@ import com.familytracker.android.data.LocationRepository
 import com.familytracker.android.location.LocationManager
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,6 +47,7 @@ class LocationForegroundService : Service() {
                     try {
                         com.familytracker.android.worker.AppUsageSync.syncNow(this@LocationForegroundService)
                     } catch (error: Exception) {
+                        if (error is CancellationException) throw error
                         preferences.appUsageSyncError = error.message ?: "Sinkronisasi penggunaan aplikasi gagal."
                     }
                 }

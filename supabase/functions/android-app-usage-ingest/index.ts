@@ -3,6 +3,18 @@ import { corsHeaders, json, parseBody } from "../_shared/http.ts";
 
 const isUuid = (value: unknown) => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const isDate = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+const isPackageName = (value: unknown) => typeof value === "string" && value.trim().length > 0 && value.length <= 255 && !/[\u0000-\u001f\u007f]/.test(value);
+const invalidRecordField = (row: unknown, deviceId: string): string | null => {
+  if (!row || typeof row !== "object") return "BENTUK_DATA";
+  const record = row as Record<string, unknown>;
+  if (!isDate(record.usageDate)) return "TANGGAL";
+  if (!isPackageName(record.packageName)) return "PACKAGE_NAME";
+  if (typeof record.appName !== "string" || !record.appName.trim() || record.appName.length > 200) return "APP_NAME";
+  if (!Number.isInteger(Number(record.usageMs)) || Number(record.usageMs) < 0 || Number(record.usageMs) > 86_400_000) return "DURASI";
+  if (record.lastUsedAt != null && (!Number.isFinite(Date.parse(String(record.lastUsedAt))) || Date.parse(String(record.lastUsedAt)) > Date.now() + 300_000)) return "WAKTU_TERAKHIR";
+  if (record.eventId !== `${deviceId}:${record.usageDate}:${record.packageName}`) return "EVENT_ID";
+  return null;
+};
 
 Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin }) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -31,19 +43,15 @@ Deno.serve(withSupabase({ auth: "none" }, async (request, { supabaseAdmin: admin
   if (!Number.isFinite(collectedAtMs) || collectedAtMs > Date.now() + 300_000) return invalid("WAKTU_PENGUMPULAN_TIDAK_VALID");
   if (!Array.isArray(records) || records.length > 2000) return invalid("JUMLAH_RIWAYAT_APLIKASI_TIDAK_VALID");
   if (!Array.isArray(sessions) || sessions.length > 2000) return invalid("JUMLAH_SESI_APLIKASI_TIDAK_VALID");
-  const recordIndex = records.findIndex((row: Record<string, unknown>) => {
-    if (!row || typeof row !== "object" || !isDate(row.usageDate) ||
-        typeof row.packageName !== "string" || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(row.packageName) ||
-        typeof row.appName !== "string" || !row.appName.trim() || row.appName.length > 200 ||
-        !Number.isInteger(Number(row.usageMs)) || Number(row.usageMs) < 0 || Number(row.usageMs) > 86_400_000 ||
-        (row.lastUsedAt != null && (!Number.isFinite(Date.parse(String(row.lastUsedAt))) || Date.parse(String(row.lastUsedAt)) > Date.now() + 300_000))) return true;
-    return row.eventId !== `${deviceId}:${row.usageDate}:${row.packageName}`;
-  });
-  if (recordIndex >= 0) return invalid(`RIWAYAT_APLIKASI_KE_${recordIndex + 1}_TIDAK_VALID`);
+  const recordIndex = records.findIndex((row: unknown) => invalidRecordField(row, String(deviceId)) != null);
+  if (recordIndex >= 0) {
+    const field = invalidRecordField(records[recordIndex], String(deviceId));
+    return invalid(`RIWAYAT_APLIKASI_KE_${recordIndex + 1}_${field}_TIDAK_VALID`);
+  }
   if ((!body.collectionEnabled || !body.usageAccessGranted) && records.length > 0) return invalid("RIWAYAT_TERKIRIM_SAAT_PENGUMPULAN_NONAKTIF");
   const sessionIndex = sessions.findIndex((row: Record<string, unknown>) => !row || typeof row !== "object" ||
     typeof row.sessionId !== "string" || row.sessionId.length > 300 ||
-    !isDate(row.usageDate) || typeof row.packageName !== "string" || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(row.packageName) ||
+    !isDate(row.usageDate) || !isPackageName(row.packageName) ||
     typeof row.appName !== "string" || !row.appName.trim() || row.appName.length > 200 ||
     !Number.isFinite(Date.parse(String(row.startedAt))) || Date.parse(String(row.startedAt)) > Date.now() + 300_000 ||
     (row.endedAt != null && (!Number.isFinite(Date.parse(String(row.endedAt))) || Date.parse(String(row.endedAt)) < Date.parse(String(row.startedAt)))) ||

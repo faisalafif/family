@@ -24,6 +24,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 object AppUsageSync {
+    private const val MAX_ROWS_PER_BATCH = 500
     private const val PERIODIC_WORK = "collect-app-usage-daily"
     private const val IMMEDIATE_WORK = "sync-app-usage-now"
     private val syncMutex = Mutex()
@@ -86,25 +87,40 @@ object AppUsageSync {
         val pendingSessions = if (enabled && accessGranted) dao.pendingSessions(deviceId) else emptyList()
         val statusTime = snapshot?.collectedAt ?: isoTimestamp(System.currentTimeMillis())
         return try {
-            val response = FunctionsRepository().syncAppUsage(
-                trackingToken = token,
-                memberId = memberId,
-                deviceId = deviceId,
-                collectionEnabled = enabled,
-                usageAccessGranted = accessGranted,
-                collectionIncomplete = snapshot?.incomplete == true,
-                collectedAt = statusTime,
-                records = pending,
-                sessions = pendingSessions,
-                activeAppPackage = snapshot?.activeAppPackage,
-                activeAppName = snapshot?.activeAppName,
-                activeAppSince = snapshot?.activeAppSince
-            )
             val syncedAt = isoTimestamp(System.currentTimeMillis())
-            pending.forEach { dao.markSynced(it.eventId, syncedAt) }
-            pendingSessions.forEach { dao.markSessionSynced(it.sessionId, syncedAt) }
+            val recordBatches = pending.chunked(MAX_ROWS_PER_BATCH)
+            val sessionBatches = pendingSessions.chunked(MAX_ROWS_PER_BATCH)
+            val batchCount = maxOf(recordBatches.size, sessionBatches.size, 1)
+            var acceptedRecords = 0
+            var acceptedSessions = 0
+            var finalStatus = "TERKIRIM"
+            val repository = FunctionsRepository()
+
+            repeat(batchCount) { batchIndex ->
+                val recordBatch = recordBatches.getOrElse(batchIndex) { emptyList() }
+                val sessionBatch = sessionBatches.getOrElse(batchIndex) { emptyList() }
+                val response = repository.syncAppUsage(
+                    trackingToken = token,
+                    memberId = memberId,
+                    deviceId = deviceId,
+                    collectionEnabled = enabled,
+                    usageAccessGranted = accessGranted,
+                    collectionIncomplete = snapshot?.incomplete == true,
+                    collectedAt = statusTime,
+                    records = recordBatch,
+                    sessions = sessionBatch,
+                    activeAppPackage = snapshot?.activeAppPackage,
+                    activeAppName = snapshot?.activeAppName,
+                    activeAppSince = snapshot?.activeAppSince
+                )
+                recordBatch.forEach { dao.markSynced(it.eventId, syncedAt) }
+                sessionBatch.forEach { dao.markSessionSynced(it.sessionId, syncedAt) }
+                acceptedRecords += response.optInt("accepted", recordBatch.size)
+                acceptedSessions += response.optInt("acceptedSessions", sessionBatch.size)
+                finalStatus = response.optString("status", finalStatus)
+            }
             preferences.appUsageSyncAt = syncedAt
-            preferences.appUsageSyncResult = "${response.optString("status", "TERKIRIM")} · ${response.optInt("accepted", 0)} aplikasi · ${response.optInt("acceptedSessions", 0)} sesi"
+            preferences.appUsageSyncResult = "$finalStatus · $acceptedRecords aplikasi · $acceptedSessions sesi"
             preferences.appUsageSyncError = ""
             ListenableWorker.Result.success()
         } catch (error: Exception) {
