@@ -67,6 +67,78 @@ function formatUsageDuration(milliseconds) {
   return minutes + " mnt";
 }
 
+function formatSessionDuration(milliseconds) {
+  const duration = Math.max(0, Number(milliseconds) || 0);
+  if (duration < 60_000) return `${Math.floor(duration / 1000)} dtk`;
+  return formatUsageDuration(duration);
+}
+
+function groupAppUsageSessions(sessions, status, now = Date.now()) {
+  const statusIsFresh = Number.isFinite(new Date(status?.reported_at).getTime()) && now - new Date(status.reported_at).getTime() < 120_000;
+  const normalized = [];
+
+  for (const session of sessions) {
+    const start = new Date(session.started_at).getTime();
+    if (!Number.isFinite(start)) continue;
+    const packageName = session.package_name || session.app_name || "unknown";
+    const sessionIsLive = Boolean(session.is_active && statusIsFresh && status?.active_app_package === session.package_name);
+    let end = new Date(session.ended_at || "").getTime();
+    if (!Number.isFinite(end) || end < start) {
+      end = sessionIsLive ? now : start + Math.max(0, Number(session.duration_ms) || 0);
+    }
+    normalized.push({
+      app_name: session.app_name,
+      package_name: packageName,
+      start,
+      end: Math.max(start, end),
+      live: sessionIsLive
+    });
+  }
+
+  normalized.sort((a, b) => a.start - b.start || a.end - b.end);
+  const groups = [];
+  const maxSessionGapMs = 15_000;
+  for (const session of normalized) {
+    const previous = groups[groups.length - 1];
+    if (previous && previous.package_name === session.package_name && session.start <= previous.latestEnd + maxSessionGapMs) {
+      previous.latestEnd = Math.max(previous.latestEnd, session.end);
+      previous.live ||= session.live;
+    } else {
+      groups.push({
+        key: `${session.package_name}:${session.start}:${groups.length}`,
+        app_name: session.app_name,
+        package_name: session.package_name,
+        start: session.start,
+        latestEnd: session.end,
+        live: session.live,
+        intervals: []
+      });
+    }
+    groups[groups.length - 1].intervals.push([session.start, session.end]);
+  }
+
+  return groups.map(group => {
+    const intervals = group.intervals.sort((a, b) => a[0] - b[0]);
+    let duration = 0;
+    let intervalStart = null;
+    let intervalEnd = null;
+    for (const [start, end] of intervals) {
+      if (intervalStart === null) {
+        intervalStart = start;
+        intervalEnd = end;
+      } else if (start <= intervalEnd) {
+        intervalEnd = Math.max(intervalEnd, end);
+      } else {
+        duration += intervalEnd - intervalStart;
+        intervalStart = start;
+        intervalEnd = end;
+      }
+    }
+    if (intervalStart !== null) duration += intervalEnd - intervalStart;
+    return { ...group, duration_ms: duration };
+  }).sort((a, b) => b.start - a.start);
+}
+
 function RefreshIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -110,6 +182,7 @@ function Dashboard() {
   const [appUsageSearch, setAppUsageSearch] = useState("");
   const [appUsageSessionPage, setAppUsageSessionPage] = useState(1);
   const [appUsageStatus, setAppUsageStatus] = useState(null);
+  const [appUsageDataKey, setAppUsageDataKey] = useState("");
   const [appUsageLoading, setAppUsageLoading] = useState(false);
   const [appUsageError, setAppUsageError] = useState("");
   const [expandedUsageEventId, setExpandedUsageEventId] = useState(null);
@@ -272,9 +345,11 @@ function Dashboard() {
       setAppUsageRecords([]);
       setAppUsageSessions([]);
       setAppUsageStatus(null);
+      setAppUsageDataKey("");
       setAppUsageError("");
       return;
     }
+    setAppUsageError("");
     setAppUsageLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke("android-app-usage-read", {
@@ -285,14 +360,12 @@ function Dashboard() {
         setAppUsageRecords(Array.isArray(data?.records) ? data.records : []);
         setAppUsageSessions(Array.isArray(data?.sessions) ? data.sessions : []);
         setAppUsageStatus(data?.status || null);
+        setAppUsageDataKey(`${member.id}:${date}`);
         setAppUsageError("");
       }
     } catch (error) {
       if (requestSequence === appUsageRequestSequenceRef.current) {
         setAppUsageError(error.message || "Riwayat penggunaan aplikasi gagal dimuat.");
-        setAppUsageRecords([]);
-        setAppUsageSessions([]);
-        setAppUsageStatus(null);
       }
     } finally {
       if (requestSequence === appUsageRequestSequenceRef.current) setAppUsageLoading(false);
@@ -860,10 +933,19 @@ function Dashboard() {
     if (historyPage > pageCount) setHistoryPage(pageCount);
   }, [historyPage, pageCount]);
 
-  const filteredAppUsageRecords = appUsageRecords.filter(record =>
+  const appUsageHasCurrentData = appUsageDataKey === `${selected?.id || ""}:${appUsageDate}`;
+  const visibleAppUsageRecords = appUsageHasCurrentData ? appUsageRecords : [];
+  const visibleAppUsageSessions = appUsageHasCurrentData ? appUsageSessions : [];
+  const visibleAppUsageStatus = appUsageHasCurrentData ? appUsageStatus : null;
+  const filteredAppUsageRecords = visibleAppUsageRecords.filter(record =>
     `${record.app_name || ""} ${record.package_name || ""}`.toLocaleLowerCase().includes(appUsageSearch.trim().toLocaleLowerCase())
   );
   const appUsagePageCount = Math.max(1, Math.ceil(filteredAppUsageRecords.length / 8));
+  const groupedAppUsageSessions = groupAppUsageSessions(visibleAppUsageSessions, visibleAppUsageStatus, clockNow);
+  const appUsageSessionPageCount = Math.max(1, Math.ceil(groupedAppUsageSessions.length / 10));
+  useEffect(() => {
+    if (appUsageSessionPage > appUsageSessionPageCount) setAppUsageSessionPage(appUsageSessionPageCount);
+  }, [appUsageSessionPage, appUsageSessionPageCount]);
 
   return (
     <div className="app">
@@ -1003,11 +1085,13 @@ function Dashboard() {
                     <input type="date" value={appUsageDate} onChange={event => setAppUsageDate(event.target.value)} />
                   </label>
                 </div>
-                {appUsageLoading ? <p className="muted">Memuat riwayat penggunaan…</p> : appUsageError ? <><p className="muted">{appUsageError}</p><button type="button" className="secondary" onClick={() => loadAppUsage(selected, appUsageDate)}>Coba lagi</button></> : !appUsageStatus ? <p className="muted">Belum ada status penggunaan dari perangkat Android. Aktifkan pencatatan dan Usage Access di aplikasi note.</p> : appUsageStatus.collection_status === "DISABLED" ? <p className="muted">Pencatatan penggunaan aplikasi sedang nonaktif di Android.</p> : appUsageStatus.collection_status === "PERMISSION_REQUIRED" ? <p className="muted">Usage Access belum diizinkan oleh pemilik perangkat. Pengumpulan belum berjalan.</p> : <>
-                  <p className="muted">Pembaruan: {new Date(appUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}. Durasi total hari ini dan riwayat tiap sesi ditampilkan terpisah.</p>
-                  {Date.now() - new Date(appUsageStatus.reported_at).getTime() > 120_000 && <p className="usage-stale-notice">Laporan Android sudah lebih dari 2 menit. Web belum menerima data baru; pastikan berbagi lokasi aktif dan perangkat terhubung internet.</p>}
-                  {appUsageStatus.active_app_name && Date.now() - new Date(appUsageStatus.reported_at).getTime() < 120_000 && <p className="usage-live-status"><span aria-hidden="true" /> Sedang digunakan: <b>{appUsageStatus.active_app_name}</b></p>}
-                  {appUsageRecords.length > 0 && <>
+                {appUsageLoading && !appUsageHasCurrentData ? <p className="muted">Memuat riwayat penggunaan...</p> : appUsageError && !appUsageHasCurrentData ? <><p className="muted">{appUsageError}</p><button type="button" className="secondary" onClick={() => loadAppUsage(selected, appUsageDate)}>Coba lagi</button></> : !visibleAppUsageStatus ? <p className="muted">Belum ada status penggunaan dari perangkat Android. Aktifkan pencatatan dan Usage Access di aplikasi note.</p> : visibleAppUsageStatus.collection_status === "DISABLED" ? <p className="muted">Pencatatan penggunaan aplikasi sedang nonaktif di Android.</p> : visibleAppUsageStatus.collection_status === "PERMISSION_REQUIRED" ? <p className="muted">Usage Access belum diizinkan oleh pemilik perangkat. Pengumpulan belum berjalan.</p> : <>
+                  <p className="muted">Pembaruan: {new Date(visibleAppUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}. Durasi total hari ini dan riwayat tiap sesi ditampilkan terpisah.</p>
+                  {appUsageLoading && <p className="app-usage-refresh-status" role="status">Memperbarui riwayat data yang tampil tetap tersedia.</p>}
+                  {appUsageError && <p className="usage-stale-notice" role="status">Pembaruan gagal. Data yang sudah tampil tetap dipertahankan: {appUsageError}</p>}
+                  {Date.now() - new Date(visibleAppUsageStatus.reported_at).getTime() > 120_000 && <p className="usage-stale-notice">Laporan Android sudah lebih dari 2 menit. Web belum menerima data baru; pastikan berbagi lokasi aktif dan perangkat terhubung internet.</p>}
+                  {visibleAppUsageStatus.active_app_name && Date.now() - new Date(visibleAppUsageStatus.reported_at).getTime() < 120_000 && <p className="usage-live-status"><span aria-hidden="true" /> Sedang digunakan: <b>{visibleAppUsageStatus.active_app_name}</b></p>}
+                  {visibleAppUsageRecords.length > 0 && <>
                   <h4 className="app-usage-subtitle">Total penggunaan per aplikasi</h4>
                   <input type="search" className="app-usage-search" value={appUsageSearch} placeholder="Cari nama aplikasi, misalnya Kalender" aria-label="Cari aplikasi" onChange={event => { setAppUsageSearch(event.target.value); setAppUsagePage(1); }} />
                   {filteredAppUsageRecords.length === 0 ? <p className="muted">Tidak ada aplikasi yang cocok dengan pencarian.</p> : <>
@@ -1026,21 +1110,24 @@ function Dashboard() {
                       </div>}
                     </li>)}
                   </ul>
-                  {filteredAppUsageRecords.length > 8 && <div className="usage-pagination"><button type="button" className="secondary" disabled={appUsagePage <= 1} onClick={() => setAppUsagePage(page => page - 1)}>Sebelumnya</button><span>Halaman {appUsagePage} dari {appUsagePageCount}</span><button type="button" className="secondary" disabled={appUsagePage >= appUsagePageCount} onClick={() => setAppUsagePage(page => page + 1)}>Berikutnya</button></div>}
+                  {filteredAppUsageRecords.length > 8 && <div className="usage-pagination"><button type="button" className="secondary" aria-label="Sebelumnya" title="Sebelumnya" disabled={appUsagePage <= 1} onClick={() => setAppUsagePage(page => page - 1)}>&lt;</button><span>Halaman {appUsagePage} dari {appUsagePageCount}</span><button type="button" className="secondary" aria-label="Berikutnya" title="Berikutnya" disabled={appUsagePage >= appUsagePageCount} onClick={() => setAppUsagePage(page => page + 1)}>&gt;</button></div>}
                   </>}
                   </>}
                   <h4 className="app-usage-subtitle">Riwayat sesi berdasarkan jam</h4>
-                  {appUsageSessions.length === 0 ? <p className="muted">Belum ada sesi tercatat untuk tanggal ini.</p> : <>
-                    <ul className="app-usage-list">{appUsageSessions.slice((appUsageSessionPage - 1) * 10, appUsageSessionPage * 10).map(session => {
-                      const live = Boolean(session.is_active && appUsageStatus.active_app_package === session.package_name && Date.now() - new Date(appUsageStatus.reported_at).getTime() < 120_000);
-                      const endLabel = session.ended_at ? new Date(session.ended_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" }) : live ? "Sedang digunakan" : "Belum ada waktu selesai";
-                      return <li className="usage-session-row" key={session.session_id}><span className="app-usage-icon" aria-hidden="true">{(session.app_name || "?").slice(0, 1).toUpperCase()}</span><span className="app-usage-name"><strong>{session.app_name || session.package_name}{live && <em className="usage-live-tag">Aktif</em>}</strong><small>{new Date(session.started_at).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })} – {endLabel}</small></span><span className="app-usage-total">{formatUsageDuration(session.duration_ms)}</span></li>;
+                  {groupedAppUsageSessions.length === 0 ? <p className="muted">Belum ada sesi tercatat untuk tanggal ini.</p> : <>
+                    <ul className="app-usage-list">{groupedAppUsageSessions.slice((appUsageSessionPage - 1) * 10, appUsageSessionPage * 10).map(session => {
+                      const startLabel = new Date(session.start).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" });
+                      const endLabel = session.live ? "Sedang digunakan" : new Date(session.latestEnd).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" });
+                      return <li className="usage-session-row" key={session.key}><span className="app-usage-icon" aria-hidden="true">{(session.app_name || "?").slice(0, 1).toUpperCase()}</span><span className="app-usage-name"><strong>{session.app_name || session.package_name}{session.live && <em className="usage-live-tag">Aktif</em>}</strong><small>{startLabel} – {endLabel}</small></span><span className="app-usage-total">{formatSessionDuration(session.duration_ms)}</span></li>;
                     })}</ul>
-                    {appUsageSessions.length > 10 && <div className="usage-pagination"><button type="button" className="secondary" disabled={appUsageSessionPage <= 1} onClick={() => setAppUsageSessionPage(page => page - 1)}>Sebelumnya</button><span>Halaman {appUsageSessionPage} dari {Math.ceil(appUsageSessions.length / 10)}</span><button type="button" className="secondary" disabled={appUsageSessionPage >= Math.ceil(appUsageSessions.length / 10)} onClick={() => setAppUsageSessionPage(page => page + 1)}>Berikutnya</button></div>}
+                    {groupedAppUsageSessions.length > 10 && <div className="usage-pagination"><button type="button" className="secondary" aria-label="Sebelumnya" title="Sebelumnya" disabled={appUsageSessionPage <= 1} onClick={() => setAppUsageSessionPage(page => page - 1)}>&lt;</button><label className="usage-page-jump">Halaman <input type="number" min="1" max={appUsageSessionPageCount} value={appUsageSessionPage} aria-label="Lompat ke halaman riwayat sesi" onChange={event => {
+                      const requestedPage = Number(event.target.value);
+                      if (Number.isFinite(requestedPage)) setAppUsageSessionPage(Math.max(1, Math.min(appUsageSessionPageCount, Math.trunc(requestedPage) || 1)));
+                    }} /> dari {appUsageSessionPageCount}</label><button type="button" className="secondary" aria-label="Berikutnya" title="Berikutnya" disabled={appUsageSessionPage >= appUsageSessionPageCount} onClick={() => setAppUsageSessionPage(page => page + 1)}>&gt;</button></div>}
                   </>}
-                  {appUsageRecords.length === 0 && appUsageSessions.length === 0 && <p className="muted">Belum ada penggunaan aplikasi untuk tanggal ini. Laporan perangkat terakhir: {new Date(appUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}.</p>}
+                  {visibleAppUsageRecords.length === 0 && visibleAppUsageSessions.length === 0 && <p className="muted">Belum ada penggunaan aplikasi untuk tanggal ini. Laporan perangkat terakhir: {new Date(visibleAppUsageStatus.collected_at).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}.</p>}
                 </>}
-                {appUsageStatus?.collection_status === "INCOMPLETE" && <p className="muted">Sebagian riwayat tidak berhasil dibaca oleh Android. Data yang tersedia tetap ditampilkan.</p>}
+                {visibleAppUsageStatus?.collection_status === "INCOMPLETE" && <p className="muted">Sebagian riwayat tidak berhasil dibaca oleh Android. Data yang tersedia tetap ditampilkan.</p>}
               </section>
               </>}
 
@@ -1057,7 +1144,7 @@ function Dashboard() {
                       <small>Belum diperiksa terhadap sumber reputasi/phishing.</small>
                     </li>)}
                   </ul>
-                  {domainMonitorRecords.length > 20 && <div className="usage-pagination"><button type="button" className="secondary" disabled={domainMonitorPage <= 1} onClick={() => setDomainMonitorPage(page => page - 1)}>Sebelumnya</button><span>Halaman {domainMonitorPage} dari {Math.ceil(domainMonitorRecords.length / 20)}</span><button type="button" className="secondary" disabled={domainMonitorPage >= Math.ceil(domainMonitorRecords.length / 20)} onClick={() => setDomainMonitorPage(page => page + 1)}>Berikutnya</button></div>}
+                  {domainMonitorRecords.length > 20 && <div className="usage-pagination"><button type="button" className="secondary" aria-label="Sebelumnya" title="Sebelumnya" disabled={domainMonitorPage <= 1} onClick={() => setDomainMonitorPage(page => page - 1)}>&lt;</button><span>Halaman {domainMonitorPage} dari {Math.ceil(domainMonitorRecords.length / 20)}</span><button type="button" className="secondary" aria-label="Berikutnya" title="Berikutnya" disabled={domainMonitorPage >= Math.ceil(domainMonitorRecords.length / 20)} onClick={() => setDomainMonitorPage(page => page + 1)}>&gt;</button></div>}
                   </>}
                   <p className="muted">Ini adalah nama domain yang terlihat pada DNS, bukan bukti halaman dibuka. URL lengkap, isi halaman, dan aplikasi sumber tidak tersedia. DNS terenkripsi dapat membuat sebagian domain tidak terlihat.</p>
                 </>}
@@ -1175,9 +1262,9 @@ function Dashboard() {
                 {displayHistory.length > historyPageSize && <nav className="history-pagination" aria-label="Halaman riwayat lokasi">
                   <span>Menampilkan {(currentHistoryPage - 1) * historyPageSize + 1}-{Math.min(currentHistoryPage * historyPageSize, displayHistory.length)} dari {displayHistory.length} grup</span>
                   <div>
-                    <button type="button" onClick={() => setHistoryPage(page => Math.max(1, page - 1))} disabled={currentHistoryPage <= 1}>Sebelumnya</button>
+                    <button type="button" aria-label="Sebelumnya" title="Sebelumnya" onClick={() => setHistoryPage(page => Math.max(1, page - 1))} disabled={currentHistoryPage <= 1}>&lt;</button>
                     <span>Halaman {currentHistoryPage} dari {pageCount}</span>
-                    <button type="button" onClick={() => setHistoryPage(page => Math.min(pageCount, page + 1))} disabled={currentHistoryPage >= pageCount}>Berikutnya</button>
+                    <button type="button" aria-label="Berikutnya" title="Berikutnya" onClick={() => setHistoryPage(page => Math.min(pageCount, page + 1))} disabled={currentHistoryPage >= pageCount}>&gt;</button>
                   </div>
                 </nav>}
                 {historyLoading && <p className="muted">Loading history...</p>}

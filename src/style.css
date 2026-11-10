@@ -131,11 +131,14 @@ select { width: 100%; padding: 9px 10px; margin: 0 0 10px; border: 1px solid #d0
 .app-usage-search { width: 100%; min-height: 40px; margin-bottom: 8px; padding: 8px 10px; font-size: 13px; }
 .usage-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0 14px; color: #667085; font-size: 12px; }
 .usage-pagination button { padding: 7px 10px; font-size: 12px; }
+.usage-page-jump { display: inline-flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap; }
+.usage-page-jump input { width: 54px; min-width: 0; padding: 6px 4px; text-align: center; }
 .usage-session-row { display: flex; align-items: center; gap: 10px; padding: 9px; border-radius: 9px; background: #fff; }
 .usage-live-status { display: flex; align-items: center; gap: 6px; margin: 10px 0; color: #176b3a; font-size: 13px; }
 .usage-live-status > span { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 3px #dcfce7; }
 .usage-live-tag { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; background: #dcfce7; color: #176b3a; font-size: 10px; font-style: normal; }
 .usage-stale-notice { margin: 8px 0; padding: 8px 10px; border-radius: 8px; background: #fff7ed; color: #9a3412; font-size: 12px; }
+.app-usage-refresh-status { margin: 4px 0 8px; color: #667085; font-size: 11px; }
 .web-safety-section { border: 1px solid #e7ebf0; background: #fff; }
 .domain-observation-list { display: grid; gap: 8px; margin: 10px 0; padding: 0; list-style: none; }
 .domain-observation-row { display: grid; gap: 5px; padding: 10px 12px; border-radius: 9px; background: #f8fafc; overflow-wrap: anywhere; }
